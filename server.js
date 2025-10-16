@@ -29,14 +29,109 @@ const client = new OpenAI({
     apiKey: config.openaiApiKey,
 });
 
+// ==================== WoodsPortal ID Extraction Function ====================
+function extractWoodsPortalId(filePath) {
+    if (!filePath || typeof filePath !== 'string') {
+        return { success: false, error: 'Invalid file path provided' };
+    }
+    
+    // Pattern: /WoodsPortal/{number}/{anything}/{numeric_id}/{filename}
+    const pattern = /\/WoodsPortal\/(\d+)\/([\d-]+)\/(\d+)\/([^\/]+)$/;
+    const match = filePath.match(pattern);
+    
+    if (match) {
+        return {
+            success: true,
+            portalId: match[1],      // "745" from first example
+            sectionId: match[2],     // "0-1" from first example
+            extractedId: match[3],   // "164064040211" - the main ID we want
+            fileName: match[4],      // "Screenshot 2025-10-14 at 12.55.13 PM.png"
+            fullPath: filePath
+        };
+    }
+    
+    return { success: false, error: 'WoodsPortal pattern not found in path' };
+}
+
+// ==================== ROUTES ====================
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        message: 'Document Analysis API',
+        version: '1.0.0',
+        endpoints: {
+            'POST /api/analyze': 'Analyze document and update HubSpot',
+            'GET /api/health': 'Health check',
+            'GET /api/extract-id': 'Extract ID from WoodsPortal path'
+        }
+    });
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: "OK",
+        timestamp: new Date().toISOString(),
+        service: "Document Analysis API",
+        environment: process.env.NODE_ENV || "development"
+    });
+});
+
+// ==================== NEW ROUTE: Extract ID from WoodsPortal Path ====================
+app.get('/api/extract-id', (req, res) => {
+    try {
+        const { path: filePath } = req.query;
+
+        if (!filePath) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required query parameter: path'
+            });
+        }
+
+        console.log(`🔍 Extracting ID from path: ${filePath}`);
+
+        const result = extractWoodsPortalId(filePath);
+
+        if (result.success) {
+            res.json({
+                success: true,
+                extractedId: result.extractedId,
+                details: {
+                    portalId: result.portalId,
+                    sectionId: result.sectionId,
+                    fileName: result.fileName,
+                    fullPath: result.fullPath
+                }
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error,
+                providedPath: filePath
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ Error in extract-id endpoint:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ==================== Existing Analyze Document Route ====================
+// (Keep all your existing helper functions: downloadFile, getFileType, analyzeImage, analyzePDF, updateProperty, etc.)
+
 // Helper: download file temporarily
 async function downloadFile(url, outputPath) {
     const response = await axios.get(url, { 
         responseType: "arraybuffer",
-        maxContentLength: 10 * 1024 * 1024 // 10MB limit
+        maxContentLength: 10 * 1024 * 1024
     });
     
-    // Ensure directory exists
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -61,7 +156,7 @@ function getFileType(url) {
 function generateTempPath(extension = ".tmp") {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 15);
-    return `/tmp/file_${timestamp}_${random}${extension}`; // Use /tmp for Vercel
+    return `/tmp/file_${timestamp}_${random}${extension}`;
 }
 
 // Cleanup temporary file
@@ -75,7 +170,7 @@ function cleanupFile(filePath) {
     }
 }
 
-// 🖼 Analyze Image – extract only visible text
+// Analyze Image
 async function analyzeImage(url) {
     console.log("🖼️ Analyzing image from URL...");
 
@@ -97,11 +192,10 @@ async function analyzeImage(url) {
 
     const result = response.choices[0].message.content.trim();
     console.log("> 📝 Extracted Text Length:", result.length);
-
     return result;
 }
 
-// 📄 Analyze PDF – summarize or extract text
+// Analyze PDF
 async function analyzePDF(url) {
     console.log("📄 Downloading and analyzing PDF...");
 
@@ -110,7 +204,6 @@ async function analyzePDF(url) {
     try {
         await downloadFile(url, tempPath);
 
-        // Upload PDF to OpenAI
         const uploadedFile = await client.files.create({
             file: fs.createReadStream(tempPath),
             purpose: "assistants",
@@ -137,7 +230,6 @@ async function analyzePDF(url) {
 
         const result = response.choices[0].message.content.trim();
         console.log("📚 PDF Text Length:", result.length);
-        
         return result;
     } finally {
         cleanupFile(tempPath);
@@ -156,7 +248,7 @@ async function updateProperty(objectType, objectId, propertyValue) {
         },
         body: JSON.stringify({
             properties: {
-                "test_property": propertyValue.substring(0, 20000) // HubSpot character limit
+                "test_property": propertyValue.substring(0, 20000)
             }
         }),
     });
@@ -198,7 +290,6 @@ function validateRequest(query, body) {
         throw new Error(`Validation failed: ${errors.join(', ')}`);
     }
 
-    // Validate file type
     const fileType = getFileType(documentUrl);
     if (fileType === "unknown") {
         throw new Error("Unsupported file type. Please provide an image or PDF URL.");
@@ -252,34 +343,13 @@ async function analyzeDocument(body, query) {
     }
 }
 
-// Routes
-app.get('/', (req, res) => {
-    res.json({
-        message: 'Document Analysis API',
-        version: '1.0.0',
-        endpoints: {
-            'POST /api/analyze': 'Analyze document and update HubSpot',
-            'GET /api/health': 'Health check'
-        }
-    });
-});
-
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: "OK",
-        timestamp: new Date().toISOString(),
-        service: "Document Analysis API",
-        environment: process.env.NODE_ENV || "development"
-    });
-});
-
+// Analyze document route
 app.post('/api/analyze', async (req, res) => {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    // Handle OPTIONS request for CORS preflight
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -299,7 +369,6 @@ app.post('/api/analyze', async (req, res) => {
     } catch (error) {
         console.error('Error in analyze handler:', error);
         
-        // Handle different error types with appropriate status codes
         if (error.message.includes('Validation failed') || error.message.includes('Missing')) {
             return res.status(400).json({
                 success: false,
@@ -326,5 +395,6 @@ export default app;
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
+        console.log(`📊 Extract ID endpoint: http://localhost:${PORT}/api/extract-id?path=YOUR_PATH`);
     });
 }
