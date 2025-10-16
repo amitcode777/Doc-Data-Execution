@@ -34,11 +34,11 @@ function extractWoodsPortalId(filePath) {
     if (!filePath || typeof filePath !== 'string') {
         return { success: false, error: 'Invalid file path provided' };
     }
-    
+
     // Pattern: /WoodsPortal/{number}/{anything}/{numeric_id}/{filename}
     const pattern = /\/WoodsPortal\/(\d+)\/([\d-]+)\/(\d+)\/([^\/]+)$/;
     const match = filePath.match(pattern);
-    
+
     if (match) {
         return {
             success: true,
@@ -49,7 +49,7 @@ function extractWoodsPortalId(filePath) {
             fullPath: filePath
         };
     }
-    
+
     return { success: false, error: 'WoodsPortal pattern not found in path' };
 }
 
@@ -98,12 +98,12 @@ app.get('/api/extract-id', (req, res) => {
             res.json({
                 success: true,
                 extractedId: result.extractedId,
-                details: {
-                    portalId: result.portalId,
-                    sectionId: result.sectionId,
-                    fileName: result.fileName,
-                    fullPath: result.fullPath
-                }
+
+                portalId: result.portalId,
+                sectionId: result.sectionId,
+                fileName: result.fileName,
+                fullPath: result.fullPath
+
             });
         } else {
             res.status(400).json({
@@ -127,16 +127,16 @@ app.get('/api/extract-id', (req, res) => {
 
 // Helper: download file temporarily
 async function downloadFile(url, outputPath) {
-    const response = await axios.get(url, { 
+    const response = await axios.get(url, {
         responseType: "arraybuffer",
         maxContentLength: 10 * 1024 * 1024
     });
-    
+
     const dir = path.dirname(outputPath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-    
+
     fs.writeFileSync(outputPath, response.data);
 }
 
@@ -200,7 +200,7 @@ async function analyzePDF(url) {
     console.log("📄 Downloading and analyzing PDF...");
 
     const tempPath = generateTempPath(".pdf");
-    
+
     try {
         await downloadFile(url, tempPath);
 
@@ -311,7 +311,7 @@ async function analyzeDocument(body, query) {
 
         // Validate and get file type
         const fileType = validateRequest(query, body);
-        
+
         let extractedText;
 
         if (fileType === "image") {
@@ -356,7 +356,7 @@ app.post('/api/analyze', async (req, res) => {
 
     try {
         const { query, body } = req;
-        
+
         if (!body || Object.keys(body).length === 0) {
             return res.status(400).json({
                 success: false,
@@ -368,7 +368,7 @@ app.post('/api/analyze', async (req, res) => {
         return res.status(200).json(result);
     } catch (error) {
         console.error('Error in analyze handler:', error);
-        
+
         if (error.message.includes('Validation failed') || error.message.includes('Missing')) {
             return res.status(400).json({
                 success: false,
