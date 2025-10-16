@@ -8,9 +8,10 @@
   "name": "javascript",
   "version": "1.0.0",
   "description": "",
-  "main": "analyzeurl.js",
+  "main": "main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node main.js",
+    "dev": "node --watch main.js"
   },
   "keywords": [],
   "author": "",
