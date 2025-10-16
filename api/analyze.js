@@ -12,13 +12,30 @@ export default async function handler(req, res) {
     }
 
     try {
-        if (req.method === 'POST') {
-            const { query, body } = req;
+        if (req.method === 'POST' || req.method === 'GET') {
+            let body = {};
+            let query = req.query;
             
+            // Handle both POST and GET
+            if (req.method === 'POST') {
+                body = req.body;
+            } else if (req.method === 'GET') {
+                // For GET requests, expect data in query parameters
+                body = {
+                    username: req.query.username,
+                    password: req.query.password,
+                    documentUrl: req.query.documentUrl
+                };
+                query = {
+                    objectType: req.query.objectType,
+                    objectId: req.query.objectId
+                };
+            }
+
             if (!body || Object.keys(body).length === 0) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Request body is required'
+                    error: 'Request parameters are required'
                 });
             }
 
@@ -27,7 +44,7 @@ export default async function handler(req, res) {
         } else {
             return res.status(405).json({ 
                 success: false,
-                error: 'Method not allowed. Use POST.' 
+                error: 'Method not allowed. Use POST or GET.' 
             });
         }
     } catch (error) {
