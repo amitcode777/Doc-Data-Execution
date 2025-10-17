@@ -217,7 +217,21 @@ async function analyzePDF(url) {
                     content: [
                         {
                             type: "text",
-                            text: "Extract all readable text from this PDF. Respond only with the text content.",
+                            text: `You are a PDF analyzer. 
+                                Extract the following fields from the PDF text and return as valid JSON only. 
+                                Do NOT include any extra text or explanations. 
+                                If a field is missing, set its value to null.
+
+                                Required fields:
+                                {
+                                "firstName": "First Name from PDF",
+                                "lastName": "Last Name from PDF", 
+                                "streetAddress": "Street + postal code",
+                                "dateOfBirth": "DD.MM.YYYY",
+                                "nationality": "Nationality from PDF",
+                                "workPermitDate": "Work Permit expiration / Kontrollfrist date",
+                                "workPermitType": "Type of work permit / Niederlassungsbewilligung"
+                                }`
                         },
                         {
                             type: "file",
@@ -229,8 +243,22 @@ async function analyzePDF(url) {
         });
 
         const result = response.choices[0].message.content.trim();
-        console.log("📚 PDF Text Length:", result.length);
-        return result;
+        console.log("📚 PDF Analysis Result:", result);
+
+        // Parse the JSON response to ensure it's valid
+        try {
+            const parsedResult = JSON.parse(result);
+            console.log("✅ Successfully parsed JSON");
+            return parsedResult;
+        } catch (parseError) {
+            console.error("❌ Failed to parse JSON response:", parseError);
+            console.log("Raw response:", result);
+            throw new Error("Invalid JSON response from AI");
+        }
+
+    } catch (error) {
+        console.error("❌ Error analyzing PDF:", error);
+        throw error;
     } finally {
         cleanupFile(tempPath);
     }
