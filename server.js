@@ -282,12 +282,6 @@ async function analyzePDF(url) {
 async function updateProperty(objectType, objectId, propertyValue) {
     const url = `https://api.hubapi.com/crm/v3/objects/${objectType}/${objectId}`;
 
-    // Convert JSON or object to string
-    const stringifiedValue = JSON.stringify(propertyValue, null, 2);
-
-    // HubSpot text fields have a max length limit, so trim if needed
-    const safeValue = stringifiedValue.substring(0, 20000);
-
     const response = await fetch(url, {
         method: "PATCH",
         headers: {
@@ -296,19 +290,23 @@ async function updateProperty(objectType, objectId, propertyValue) {
         },
         body: JSON.stringify({
             properties: {
-                "test_property": safeValue
-            }
+                "test_property": JSON.stringify(propertyValue) // 👈 Must be a multiline text property in HubSpot
+            },
         }),
     });
 
+    // 🧩 Handle errors properly
     if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(`Failed to update ${objectType}: ${response.status} ${JSON.stringify(errorData)}`);
+        console.error("❌ Failed to update property:", errorData);
+        throw new Error(`HubSpot update failed: ${response.status}`);
     }
 
     const data = await response.json();
+    console.log("✅ Successfully updated HubSpot property");
     return data;
 }
+
 
 
 
