@@ -202,50 +202,63 @@ async function analyzePDF(url) {
     const tempPath = generateTempPath(".pdf");
 
     try {
+        // 1️⃣ Download the PDF locally
         await downloadFile(url, tempPath);
 
+        // 2️⃣ Upload to OpenAI
         const uploadedFile = await client.files.create({
             file: fs.createReadStream(tempPath),
             purpose: "assistants",
         });
 
+        // 3️⃣ Use structured extraction prompt
+        const prompt = `
+                    You are a PDF data extraction assistant designed for automation workflows.
+                    Your job is to extract structured data from a Swiss residence or work permit (PDF text).
+
+                    Output ONLY valid JSON.
+                    Do NOT include explanations, markdown, or extra text.
+                    If a field is missing or unreadable, set its value to null.
+
+                    Required JSON format:
+                    {
+                    "firstName": "First name of the person from the PDF",
+                    "lastName": "Last name of the person from the PDF",
+                    "streetAddress": "Street name + house number + postal code + city",
+                    "dateOfBirth": "DD.MM.YYYY",
+                    "nationality": "Nationality from the document",
+                    "workPermitDate": "Work Permit expiration or Kontrollfrist date (DD.MM.YYYY)",
+                    "workPermitType": "Type of permit, e.g., Niederlassungsbewilligung, Aufenthaltsbewilligung, Kurzaufenthaltsbewilligung"
+                    }
+
+                    Extraction Rules:
+                    - “Name / Nom / Cognome” → lastName
+                    - “Vorname / Prénom / Nome” → firstName
+                    - “Geburtsdatum / Date de naissance / Data di nascita” → dateOfBirth
+                    - “Staatsangehörigkeit / Nationalité / Nazionalità” → nationality
+                    - “Kontrollfrist”, “Gültig bis”, or “Expiration” → workPermitDate
+                    - “Niederlassungsbewilligung”, “Aufenthaltsbewilligung”, or “Kurzaufenthaltsbewilligung” → workPermitType
+                    - Address is usually near “Strasse / Rue / Via” and may contain a postal code (e.g., 5103 Wildegg).
+                    `;
+
+        // 4️⃣ Send to GPT model
         const response = await client.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4o-mini", // or "gpt-4o" for more reliable output
             messages: [
                 {
                     role: "user",
                     content: [
-                        {
-                            type: "text",
-                            text: `You are a PDF analyzer. 
-                                Extract the following fields from the PDF text and return as valid JSON only. 
-                                Do NOT include any extra text or explanations. 
-                                If a field is missing, set its value to null.
-
-                                Required fields:
-                                {
-                                "firstName": "First Name from PDF",
-                                "lastName": "Last Name from PDF", 
-                                "streetAddress": "Street + postal code",
-                                "dateOfBirth": "DD.MM.YYYY",
-                                "nationality": "Nationality from PDF",
-                                "workPermitDate": "Work Permit expiration / Kontrollfrist date",
-                                "workPermitType": "Type of work permit / Niederlassungsbewilligung"
-                                }`
-                        },
-                        {
-                            type: "file",
-                            file: { file_id: uploadedFile.id },
-                        },
+                        { type: "text", text: prompt },
+                        { type: "file", file: { file_id: uploadedFile.id } },
                     ],
                 },
             ],
         });
 
+        // 5️⃣ Parse and validate response
         const result = response.choices[0].message.content.trim();
         console.log("📚 PDF Analysis Result:", result);
 
-        // Parse the JSON response to ensure it's valid
         try {
             const parsedResult = JSON.parse(result);
             console.log("✅ Successfully parsed JSON");
@@ -263,6 +276,7 @@ async function analyzePDF(url) {
         cleanupFile(tempPath);
     }
 }
+
 
 // Update HubSpot property
 async function updateProperty(objectType, objectId, propertyValue) {
