@@ -377,8 +377,7 @@ async function analyzeDocument(body, query) {
             objectType,
             objectId,
             fileType,
-            extractedTextLength: extractedText.length,
-            preview: extractedText.substring(0, 500) + (extractedText.length > 500 ? "..." : ""),
+            preview: JSON.stringify(propertyValue),
             hubspotUpdate: {
                 id: updateResult.id,
                 updatedAt: updateResult.updatedAt
