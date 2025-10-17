@@ -282,6 +282,12 @@ async function analyzePDF(url) {
 async function updateProperty(objectType, objectId, propertyValue) {
     const url = `https://api.hubapi.com/crm/v3/objects/${objectType}/${objectId}`;
 
+    // Convert JSON or object to string
+    const stringifiedValue = JSON.stringify(propertyValue, null, 2);
+
+    // HubSpot text fields have a max length limit, so trim if needed
+    const safeValue = stringifiedValue.substring(0, 20000);
+
     const response = await fetch(url, {
         method: "PATCH",
         headers: {
@@ -290,7 +296,7 @@ async function updateProperty(objectType, objectId, propertyValue) {
         },
         body: JSON.stringify({
             properties: {
-                "test_property": propertyValue.substring(0, 20000)
+                "test_property": safeValue
             }
         }),
     });
@@ -303,6 +309,8 @@ async function updateProperty(objectType, objectId, propertyValue) {
     const data = await response.json();
     return data;
 }
+
+
 
 // Authentication middleware
 function authenticate(body) {
