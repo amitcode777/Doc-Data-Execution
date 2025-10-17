@@ -377,7 +377,7 @@ async function analyzeDocument(body, query) {
             objectType,
             objectId,
             fileType,
-            preview: JSON.stringify(propertyValue),
+            preview: JSON.stringify(extractedText),
             hubspotUpdate: {
                 id: updateResult.id,
                 updatedAt: updateResult.updatedAt
