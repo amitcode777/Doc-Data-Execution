@@ -12,46 +12,33 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // Configuration
 const config = {
     openaiApiKey: process.env.OPENAI_API_KEY,
     hubspotToken: process.env.HUBSPOT_ACCESS_TOKEN,
     auth: {
-        username: process.env.API_USERNAME || "admin",
-        password: process.env.API_PASSWORD || "password123"
+        username: process.env.API_USERNAME,
+        password: process.env.API_PASSWORD
     }
 };
+
+// Validate required environment variables
+if (!config.openaiApiKey) {
+    console.error("❌ OPENAI_API_KEY is required");
+    process.exit(1);
+}
+
+if (!config.hubspotToken) {
+    console.error("❌ HUBSPOT_ACCESS_TOKEN is required");
+    process.exit(1);
+}
 
 // Initialize OpenAI client
 const client = new OpenAI({
     apiKey: config.openaiApiKey,
 });
-
-// ==================== WoodsPortal ID Extraction Function ====================
-function extractWoodsPortalId(filePath) {
-    if (!filePath || typeof filePath !== 'string') {
-        return { success: false, error: 'Invalid file path provided' };
-    }
-
-    // Pattern: /WoodsPortal/{number}/{anything}/{numeric_id}/{filename}
-    const pattern = /\/WoodsPortal\/(\d+)\/([\d-]+)\/(\d+)\/([^\/]+)$/;
-    const match = filePath.match(pattern);
-
-    if (match) {
-        return {
-            success: true,
-            portalId: match[1],      // "745" from first example
-            sectionId: match[2],     // "0-1" from first example
-            extractedId: match[3],   // "164064040211" - the main ID we want
-            fileName: match[4],      // "Screenshot 2025-10-14 at 12.55.13 PM.png"
-            fullPath: filePath
-        };
-    }
-
-    return { success: false, error: 'WoodsPortal pattern not found in path' };
-}
 
 // ==================== ROUTES ====================
 
@@ -61,9 +48,9 @@ app.get('/', (req, res) => {
         message: 'Document Analysis API',
         version: '1.0.0',
         endpoints: {
-            'POST /api/analyze': 'Analyze document and update HubSpot',
-            'GET /api/health': 'Health check',
-            'GET /api/extract-id': 'Extract ID from WoodsPortal path'
+            'POST /api/analyze': 'Analyze document from webhook data',
+            'POST /webhook/hubspot': 'HubSpot webhook endpoint',
+            'GET /api/health': 'Health check'
         }
     });
 });
@@ -71,65 +58,18 @@ app.get('/', (req, res) => {
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({
-        status: "OK",
+        status: 'OK',
         timestamp: new Date().toISOString(),
-        service: "Document Analysis API",
-        environment: process.env.NODE_ENV || "development"
+        uptime: process.uptime()
     });
 });
-
-// ==================== NEW ROUTE: Extract ID from WoodsPortal Path ====================
-app.get('/api/extract-id', (req, res) => {
-    try {
-        const { path: filePath } = req.query;
-
-        if (!filePath) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required query parameter: path'
-            });
-        }
-
-        console.log(`🔍 Extracting ID from path: ${filePath}`);
-
-        const result = extractWoodsPortalId(filePath);
-
-        if (result.success) {
-            res.json({
-                success: true,
-                extractedId: result.extractedId,
-
-                portalId: result.portalId,
-                sectionId: result.sectionId,
-                fileName: result.fileName,
-                fullPath: result.fullPath
-
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                error: result.error,
-                providedPath: filePath
-            });
-        }
-
-    } catch (error) {
-        console.error('❌ Error in extract-id endpoint:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
-
-// ==================== Existing Analyze Document Route ====================
-// (Keep all your existing helper functions: downloadFile, getFileType, analyzeImage, analyzePDF, updateProperty, etc.)
 
 // Helper: download file temporarily
 async function downloadFile(url, outputPath) {
     const response = await axios.get(url, {
         responseType: "arraybuffer",
-        maxContentLength: 10 * 1024 * 1024
+        maxContentLength: 10 * 1024 * 1024,
+        timeout: 30000
     });
 
     const dir = path.dirname(outputPath);
@@ -168,6 +108,61 @@ function cleanupFile(filePath) {
     } catch (error) {
         console.warn("Warning: Could not cleanup temporary file:", filePath);
     }
+}
+
+function parseFileRecordString(inputString) {
+    // Split the string by commas
+    const parts = inputString.split(',');
+
+    // Validate that we have exactly 3 parts
+    if (parts.length !== 3) {
+        throw new Error(`Invalid input format. Expected 3 parts separated by commas, got ${parts.length}`);
+    }
+
+    const [fileId, objectTypeId, recordId] = parts;
+
+    // Validate that none of the parts are empty
+    if (!fileId || !objectTypeId || !recordId) {
+        throw new Error('Invalid input: All parts (fileId, objectTypeId, recordId) must be non-empty');
+    }
+
+    // Return as an object with named properties
+    return {
+        fileId: fileId.trim(),
+        objectTypeId: objectTypeId.trim(),
+        recordId: recordId.trim()
+    };
+}
+
+// Get signed URL from HubSpot file ID
+async function getSignedFileUrl(fileId) {
+    console.log(`📁 Getting signed URL for file ID: ${fileId}`);
+    
+    const url = `https://api.hubapi.com/files/v3/files/${fileId}/signed-url`;
+    const options = {
+        method: 'GET', 
+        headers: {
+            Authorization: `Bearer ${config.hubspotToken}`,
+            'Content-Type': 'application/json'
+        }
+    };
+
+    const response = await fetch(url, options);
+    
+    if (!response.ok) {
+        const errorData = await response.json();
+        console.error('❌ HubSpot API error:', errorData);
+        throw new Error(`Failed to get signed URL: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (!data.url) {
+        throw new Error('No URL found in HubSpot response');
+    }
+    
+    console.log('✅ Got signed URL successfully');
+    return data.url;
 }
 
 // Analyze Image
@@ -232,18 +227,18 @@ async function analyzePDF(url) {
                     }
 
                     Extraction Rules:
-                    - “Name / Nom / Cognome” → lastName
-                    - “Vorname / Prénom / Nome” → firstName
-                    - “Geburtsdatum / Date de naissance / Data di nascita” → dateOfBirth
-                    - “Staatsangehörigkeit / Nationalité / Nazionalità” → nationality
-                    - “Kontrollfrist”, “Gültig bis”, or “Expiration” → workPermitDate
-                    - “Niederlassungsbewilligung”, “Aufenthaltsbewilligung”, or “Kurzaufenthaltsbewilligung” → workPermitType
-                    - Address is usually near “Strasse / Rue / Via” and may contain a postal code (e.g., 5103 Wildegg).
+                    - "Name / Nom / Cognome" → lastName
+                    - "Vorname / Prénom / Nome" → firstName
+                    - "Geburtsdatum / Date de naissance / Data di nascita" → dateOfBirth
+                    - "Staatsangehörigkeit / Nationalité / Nazionalità" → nationality
+                    - "Kontrollfrist", "Gültig bis", or "Expiration" → workPermitDate
+                    - "Niederlassungsbewilligung", "Aufenthaltsbewilligung", or "Kurzaufenthaltsbewilligung" → workPermitType
+                    - Address is usually near "Strasse / Rue / Via" and may contain a postal code (e.g., 5103 Wildegg).
                     `;
 
         // 4️⃣ Send to GPT model
         const response = await client.chat.completions.create({
-            model: "gpt-4o-mini", // or "gpt-4o" for more reliable output
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "user",
@@ -277,7 +272,6 @@ async function analyzePDF(url) {
     }
 }
 
-
 // Update HubSpot property
 async function updateProperty(objectType, objectId, propertyValue) {
     const url = `https://api.hubapi.com/crm/v3/objects/${objectType}/${objectId}`;
@@ -290,12 +284,11 @@ async function updateProperty(objectType, objectId, propertyValue) {
         },
         body: JSON.stringify({
             properties: {
-                "test_property": JSON.stringify(propertyValue) // 👈 Must be a multiline text property in HubSpot
+                "extracted_data": JSON.stringify(propertyValue)
             },
         }),
     });
 
-    // 🧩 Handle errors properly
     if (!response.ok) {
         const errorData = await response.json();
         console.error("❌ Failed to update property:", errorData);
@@ -307,77 +300,68 @@ async function updateProperty(objectType, objectId, propertyValue) {
     return data;
 }
 
-
-
-
-// Authentication middleware
-function authenticate(body) {
-    const { username, password } = body;
-
-    if (!username || !password) {
-        throw new Error("Missing username or password in request body");
-    }
-
-    if (username !== config.auth.username || password !== config.auth.password) {
-        throw new Error("Invalid credentials");
-    }
-}
-
-// Validation
-function validateRequest(query, body) {
-    const { objectType, objectId } = query;
-    const { documentUrl } = body;
-
-    const errors = [];
-
-    if (!objectType) errors.push("objectType query parameter is required");
-    if (!objectId) errors.push("objectId query parameter is required");
-    if (!documentUrl) errors.push("documentUrl in request body is required");
-
-    if (errors.length > 0) {
-        throw new Error(`Validation failed: ${errors.join(', ')}`);
-    }
-
-    const fileType = getFileType(documentUrl);
-    if (fileType === "unknown") {
-        throw new Error("Unsupported file type. Please provide an image or PDF URL.");
-    }
-
-    return fileType;
-}
-
-// Main analysis function
-async function analyzeDocument(body, query) {
+// Main analysis function for webhook
+async function processWebhookData(webhookData) {
     try {
-        const { objectType, objectId } = query;
-        const { documentUrl, username, password } = body;
-
-        console.log(`📥 Request received for ${objectType} ${objectId}`);
-
-        // Authenticate
-        authenticate(body);
-
-        // Validate and get file type
-        const fileType = validateRequest(query, body);
-
-        let extractedText;
-
-        if (fileType === "image") {
-            extractedText = await analyzeImage(documentUrl);
-        } else if (fileType === "pdf") {
-            extractedText = await analyzePDF(documentUrl);
+        console.log('🔔 Processing webhook data...');
+        
+        // Extract the first event from webhook array
+        const event = webhookData[0];
+        if (!event) {
+            throw new Error('No event data found in webhook');
         }
 
-        // Update HubSpot property
-        const updateResult = await updateProperty(objectType, objectId, extractedText);
+        // Get and parse the propertyValue
+        const { propertyValue, objectId } = event;
+        
+        if (!propertyValue) {
+            throw new Error('propertyValue is missing in webhook data');
+        }
+
+        console.log(`📥 Raw propertyValue: ${propertyValue}`);
+        
+        // Parse the file record string
+        const { fileId, objectTypeId, recordId } = parseFileRecordString(propertyValue);
+        
+        console.log(`📋 Parsed values:`, { fileId, objectTypeId, recordId });
+
+        // Get signed URL from HubSpot
+        const documentUrl = await getSignedFileUrl(fileId);
+        
+        // Detect file type
+        const fileType = getFileType(documentUrl);
+        if (fileType === "unknown") {
+            throw new Error("Unsupported file type from HubSpot file");
+        }
+
+        console.log(`📄 File type detected: ${fileType}`);
+        console.log(`🔗 Document URL: ${documentUrl}`);
+
+        let extractedData;
+
+        // Analyze document based on type
+        if (fileType === "image") {
+            extractedData = await analyzeImage(documentUrl);
+        } else if (fileType === "pdf") {
+            extractedData = await analyzePDF(documentUrl);
+        }
+
+        // Update HubSpot record (using objectTypeId and recordId from parsed string)
+        const updateResult = await updateProperty(objectTypeId, recordId, extractedData);
 
         return {
             success: true,
             message: "Document analyzed and HubSpot updated successfully",
-            objectType,
-            objectId,
+            webhookEventId: event.eventId,
+            parsedData: {
+                fileId,
+                objectTypeId, 
+                recordId
+            },
             fileType,
-            preview: JSON.stringify(extractedText),
+            analysisPreview: typeof extractedData === 'string' 
+                ? extractedData.substring(0, 200) + '...'
+                : JSON.stringify(extractedData).substring(0, 200) + '...',
             hubspotUpdate: {
                 id: updateResult.id,
                 updatedAt: updateResult.updatedAt
@@ -385,13 +369,13 @@ async function analyzeDocument(body, query) {
         };
 
     } catch (error) {
-        console.error("❌ API Error:", error);
+        console.error("❌ Webhook processing error:", error);
         throw error;
     }
 }
 
-// Analyze document route
-app.post('/api/analyze', async (req, res) => {
+// Webhook endpoint for HubSpot
+app.post('/webhook/hubspot', async (req, res) => {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -402,36 +386,56 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     try {
-        const { query, body } = req;
+        const webhookData = req.body;
 
-        if (!body || Object.keys(body).length === 0) {
+        if (!webhookData || !Array.isArray(webhookData) || webhookData.length === 0) {
             return res.status(400).json({
                 success: false,
-                error: 'Request body is required'
+                error: 'Invalid webhook data: expected array with at least one event'
             });
         }
 
-        const result = await analyzeDocument(body, query);
+        console.log('📨 Webhook received:', {
+            eventId: webhookData[0].eventId,
+            objectId: webhookData[0].objectId,
+            propertyName: webhookData[0].propertyName
+        });
+
+        const result = await processWebhookData(webhookData);
+        
+        return res.status(200).json(result);
+        
+    } catch (error) {
+        console.error('Error in webhook handler:', error);
+
+        return res.status(500).json({
+            success: false,
+            error: error.message,
+            eventId: req.body?.[0]?.eventId
+        });
+    }
+});
+
+// Legacy analyze endpoint (for backward compatibility)
+app.post('/api/analyze', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    try {
+        // This endpoint now also expects webhook format
+        const result = await processWebhookData(req.body);
         return res.status(200).json(result);
     } catch (error) {
         console.error('Error in analyze handler:', error);
-
-        if (error.message.includes('Validation failed') || error.message.includes('Missing')) {
-            return res.status(400).json({
-                success: false,
-                error: error.message
-            });
-        } else if (error.message.includes('Invalid credentials')) {
-            return res.status(401).json({
-                success: false,
-                error: error.message
-            });
-        } else {
-            return res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        }
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
 });
 
@@ -442,6 +446,7 @@ export default app;
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
-        console.log(`📊 Extract ID endpoint: http://localhost:${PORT}/api/extract-id?path=YOUR_PATH`);
+        console.log(`📨 Webhook endpoint: http://localhost:${PORT}/webhook/hubspot`);
+        console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
     });
 }
