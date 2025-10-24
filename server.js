@@ -649,7 +649,7 @@ app.post('/webhook/hubspot', async (req, res) => {
         // Attach the original HubSpot document file to the email
         const fileId = result?.parsedData?.fileId;
         const signedUrl = fileId ? await getSignedFileUrl(fileId) : null;
-        const fileType = getFileType(documentUrl);
+        const fileType = getFileType(signedUrl);
         const extension = fileType === "pdf" ? ".pdf" : ".jpg";
         const tempFilePath = generateTempPath(extension);
         await downloadFile(signedUrl, tempFilePath);
