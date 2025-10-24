@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
+import nodemailer from "nodemailer";
 
 // Load environment variables
 dotenv.config();
@@ -544,6 +545,100 @@ async function processWebhookData(webhookData) {
     }
 }
 
+async function sendBeautifulEmail(to, subject, message, attachmentUrl = null) {
+    try {
+        // 1️⃣ Configure SMTP transporter
+        const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: process.env.SMTP_PORT || 587,
+            secure: process.env.SMTP_SECURE === "true",
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS,
+            },
+        });
+
+        // 2️⃣ Build modern, responsive HTML email body
+        const htmlContent = `
+        <div style="font-family: Arial, sans-serif; background: #f5f6fa; padding: 30px;">
+          <div style="max-width: 600px; margin: auto; background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+            <div style="background: linear-gradient(135deg, #6C63FF, #2C3E50); color: white; text-align: center; padding: 20px;">
+              <h1 style="margin: 0;">✨ ${subject}</h1>
+            </div>
+
+            <div style="padding: 30px;">
+              <p style="font-size: 16px; color: #333;">${message}</p>
+
+              ${attachmentUrl
+                ? `<p style="font-size: 14px; color: #555;">The analyzed document is attached below.</p>`
+                : ""
+            }
+
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="https://yourwebsite.com" 
+                   style="background: #6C63FF; color: white; padding: 12px 25px; border-radius: 5px; text-decoration: none; font-weight: bold;">
+                   Visit Dashboard
+                </a>
+              </div>
+
+              <p style="font-size: 14px; color: #777;">If you didn’t request this, please ignore this email.</p>
+            </div>
+
+            <div style="background: #f0f0f0; text-align: center; padding: 10px; font-size: 12px; color: #888;">
+              &copy; ${new Date().getFullYear()} Your Company. All rights reserved.
+            </div>
+          </div>
+        </div>
+      `;
+
+        // 3️⃣ Handle attachment download (if provided)
+        const attachments = [];
+        if (attachmentUrl) {
+            const fileName = path.basename(new URL(attachmentUrl).pathname);
+            const tempPath = `/tmp/${fileName}`;
+
+            console.log(`📥 Downloading attachment from: ${attachmentUrl}`);
+
+            const response = await axios.get(attachmentUrl, { responseType: "arraybuffer" });
+            fs.writeFileSync(tempPath, response.data);
+
+            attachments.push({
+                filename: fileName,
+                path: tempPath,
+            });
+
+            console.log(`✅ File saved temporarily at: ${tempPath}`);
+        }
+
+        // 4️⃣ Send the email with attachment
+        const info = await transporter.sendMail({
+            from: `"Your App" <${process.env.EMAIL_USER}>`,
+            to,
+            subject,
+            html: htmlContent,
+            attachments,
+        });
+
+        console.log("✅ Email sent successfully:", info.messageId);
+
+        // 5️⃣ Cleanup temp file
+        if (attachments.length > 0) {
+            try {
+                fs.unlinkSync(attachments[0].path);
+                console.log("🧹 Temporary file deleted:", attachments[0].path);
+            } catch (cleanupError) {
+                console.warn("⚠️ Failed to delete temp file:", cleanupError.message);
+            }
+        }
+
+        return info;
+    } catch (error) {
+        console.error("❌ Error sending email:", error);
+        throw error;
+    }
+}
+
+
 // Webhook endpoint for HubSpot
 app.post('/webhook/hubspot', async (req, res) => {
     // Set CORS headers
@@ -573,7 +668,25 @@ app.post('/webhook/hubspot', async (req, res) => {
 
         const result = await processWebhookData(webhookData);
 
+        // Attach the original HubSpot document file to the email
+        const fileId = result?.parsedData?.fileId;
+        const signedUrl = fileId ? await getSignedFileUrl(fileId) : null;
+
+        await sendBeautifulEmail(
+            process.env.EMAIL_SEND_TO,
+            "📄 Document Analyzed Successfully!",
+            `The document for record <b>${result?.parsedData?.recordId}</b> has been analyzed successfully.<br><br>
+            Extracted Fields:<br>
+            - <b>Full Name:</b> ${result.extractedFields.fullName || "N/A"}<br>
+            - <b>Nationality:</b> ${result.extractedFields.nationality || "N/A"}<br>
+            - <b>Work Permit:</b> ${result.extractedFields.workPermitType || "N/A"}<br><br>
+            The analyzed file is attached below.
+            `,
+            signedUrl
+        );
+
         return res.status(200).json(result);
+
 
     } catch (error) {
         console.error('Error in webhook handler:', error);
