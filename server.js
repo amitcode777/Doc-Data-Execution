@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
-import nodemailer from "nodemailer";
+import nodemailer from 'nodemailer';
 
 // Load environment variables
 dotenv.config();
@@ -15,57 +15,32 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
-// Configuration
-const config = {
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    hubspotToken: process.env.HUBSPOT_ACCESS_TOKEN,
-    auth: {
-        username: process.env.API_USERNAME,
-        password: process.env.API_PASSWORD
-    }
-};
-
 // Validate required environment variables
-if (!config.openaiApiKey) {
-    console.error("❌ OPENAI_API_KEY is required");
-    process.exit(1);
-}
+const openaiApiKey = process.env.OPENAI_API_KEY;
+const hubspotToken = process.env.HUBSPOT_ACCESS_TOKEN;
 
-if (!config.hubspotToken) {
-    console.error("❌ HUBSPOT_ACCESS_TOKEN is required");
+if (!openaiApiKey || !hubspotToken) {
+    console.error("❌ Missing required environment variables");
     process.exit(1);
 }
 
 // Initialize OpenAI client
-const client = new OpenAI({
-    apiKey: config.openaiApiKey,
-});
+const client = new OpenAI({ apiKey: openaiApiKey });
 
 // ==================== ROUTES ====================
 
-// Root endpoint
 app.get('/', (req, res) => {
     res.json({
         message: 'Document Analysis API',
-        version: '1.0.0',
-        endpoints: {
-            'POST /api/analyze': 'Analyze document from webhook data',
-            'POST /webhook/hubspot': 'HubSpot webhook endpoint',
-            'GET /api/health': 'Health check'
-        }
+        version: '1.0.0'
     });
 });
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime()
-    });
+    res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Helper: download file temporarily
+// Helper functions
 async function downloadFile(url, outputPath) {
     const response = await axios.get(url, {
         responseType: "arraybuffer",
@@ -74,334 +49,150 @@ async function downloadFile(url, outputPath) {
     });
 
     const dir = path.dirname(outputPath);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-    }
-
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(outputPath, response.data);
 }
 
-// Detect file type from URL
 function getFileType(url) {
     try {
         const ext = path.extname(new URL(url).pathname).toLowerCase();
         if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"].includes(ext)) return "image";
         if ([".pdf"].includes(ext)) return "pdf";
         return "unknown";
-    } catch (error) {
+    } catch {
         return "unknown";
     }
 }
 
-// Generate temporary file path
 function generateTempPath(extension = ".tmp") {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 15);
-    return `/tmp/file_${timestamp}_${random}${extension}`;
+    return `/tmp/file_${Date.now()}_${Math.random().toString(36).substring(2, 15)}${extension}`;
 }
 
-// Cleanup temporary file
 function cleanupFile(filePath) {
     try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     } catch (error) {
-        console.warn("Warning: Could not cleanup temporary file:", filePath);
+        console.warn("Warning: Could not cleanup file:", filePath);
     }
 }
 
 function parseFileRecordString(inputString) {
-    // Split the string by commas
     const parts = inputString.split(',');
+    if (parts.length !== 3) throw new Error('Invalid input format');
 
-    // Validate that we have exactly 3 parts
-    if (parts.length !== 3) {
-        throw new Error(`Invalid input format. Expected 3 parts separated by commas, got ${parts.length}`);
-    }
+    const [fileId, objectTypeId, recordId] = parts.map(part => part.trim());
+    if (!fileId || !objectTypeId || !recordId) throw new Error('All parts must be non-empty');
 
-    const [fileId, objectTypeId, recordId] = parts;
-
-    // Validate that none of the parts are empty
-    if (!fileId || !objectTypeId || !recordId) {
-        throw new Error('Invalid input: All parts (fileId, objectTypeId, recordId) must be non-empty');
-    }
-
-    // Return as an object with named properties
-    return {
-        fileId: fileId.trim(),
-        objectTypeId: objectTypeId.trim(),
-        recordId: recordId.trim()
-    };
+    return { fileId, objectTypeId, recordId };
 }
 
-// Get signed URL from HubSpot file ID
 async function getSignedFileUrl(fileId) {
-    console.log(`📁 Getting signed URL for file ID: ${fileId}`);
-
-    const url = `https://api.hubapi.com/files/v3/files/${fileId}/signed-url`;
-    const options = {
-        method: 'GET',
+    const response = await fetch(`https://api.hubapi.com/files/v3/files/${fileId}/signed-url`, {
         headers: {
-            Authorization: `Bearer ${config.hubspotToken}`,
+            Authorization: `Bearer ${hubspotToken}`,
             'Content-Type': 'application/json'
         }
-    };
+    });
 
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-        const errorData = await response.json();
-        console.error('❌ HubSpot API error:', errorData);
-        throw new Error(`Failed to get signed URL: ${response.status} ${response.statusText}`);
-    }
+    if (!response.ok) throw new Error(`Failed to get signed URL: ${response.status}`);
 
     const data = await response.json();
+    if (!data.url) throw new Error('No URL found in response');
 
-    if (!data.url) {
-        throw new Error('No URL found in HubSpot response');
-    }
-
-    console.log('✅ Got signed URL successfully');
     return data.url;
 }
 
-// Analyze Image with structured JSON output (same as PDF)
-async function analyzeImage(url) {
-    console.log("🖼️ Analyzing image with structured extraction...");
-
-    const prompt = `
-You are a document data extraction assistant designed for automation workflows.
-Your job is to extract structured data from a Swiss residence or work permit document (image).
-
-Output ONLY valid JSON.
-Do NOT include explanations, markdown, or extra text.
-If a field is missing or unreadable, set its value to null.
+// Analysis functions
+const analysisPrompt = `
+Extract structured data from Swiss residence/work permit documents.
+Output ONLY valid JSON. Use null for missing/unreadable fields.
 
 Required JSON format:
 {
-"firstName": "First name of the person from the document",
-"lastName": "Last name of the person from the document", 
-"streetAddress": "Street name + house number + postal code + city",
+"firstName": "First name from document",
+"lastName": "Last name from document", 
+"streetAddress": "Street + house number + postal code + city",
 "dateOfBirth": "DD.MM.YYYY",
-"nationality": "Nationality from the document",
-"workPermitDate": "Work Permit expiration or Kontrollfrist date (DD.MM.YYYY)",
-"workPermitType": "Type of permit, e.g., Niederlassungsbewilligung, Aufenthaltsbewilligung, Kurzaufenthaltsbewilligung"
+"nationality": "Nationality",
+"workPermitDate": "Work Permit expiration (DD.MM.YYYY)",
+"workPermitType": "Type of permit"
 }
-
-Extraction Rules:
-- "Name / Nom / Cognome" → lastName
-- "Vorname / Prénom / Nome" → firstName  
-- "Geburtsdatum / Date de naissance / Data di nascita" → dateOfBirth
-- "Staatsangehörigkeit / Nationalité / Nazionalità" → nationality
-- "Kontrollfrist", "Gültig bis", or "Expiration" → workPermitDate
-- "Niederlassungsbewilligung", "Aufenthaltsbewilligung", or "Kurzaufenthaltsbewilligung" → workPermitType
-- Address is usually near "Strasse / Rue / Via" and may contain a postal code (e.g., 5103 Wildegg).
 `;
 
+async function analyzeImage(url) {
     const response = await client.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [
-            {
-                role: "user",
-                content: [
-                    {
-                        type: "text",
-                        text: prompt,
-                    },
-                    {
-                        type: "image_url",
-                        image_url: { url }
-                    },
-                ],
-            },
-        ],
+        messages: [{
+            role: "user",
+            content: [
+                { type: "text", text: analysisPrompt },
+                { type: "image_url", image_url: { url } }
+            ],
+        }],
         max_tokens: 1000
     });
 
     const result = response.choices[0].message.content.trim();
-    console.log("📷 Image Analysis Raw Result:", result);
-
-    try {
-        const parsedResult = JSON.parse(result);
-        console.log("✅ Successfully parsed image analysis JSON");
-        return parsedResult;
-    } catch (parseError) {
-        console.error("❌ Failed to parse JSON response from image analysis:", parseError);
-        console.log("Raw response:", result);
-        throw new Error("Invalid JSON response from image analysis");
-    }
+    return JSON.parse(result);
 }
 
-// Analyze PDF
 async function analyzePDF(url) {
-    console.log("📄 Downloading and analyzing PDF...");
-
     const tempPath = generateTempPath(".pdf");
 
     try {
-        // 1️⃣ Download the PDF locally
         await downloadFile(url, tempPath);
 
-        // 2️⃣ Upload to OpenAI
         const uploadedFile = await client.files.create({
             file: fs.createReadStream(tempPath),
             purpose: "assistants",
         });
 
-        // 3️⃣ Use structured extraction prompt
-        const prompt = `
-You are a PDF data extraction assistant designed for automation workflows.
-Your job is to extract structured data from a Swiss residence or work permit (PDF text).
-
-Output ONLY valid JSON.
-Do NOT include explanations, markdown, or extra text.
-If a field is missing or unreadable, set its value to null.
-
-Required JSON format:
-{
-"firstName": "First name of the person from the PDF",
-"lastName": "Last name of the person from the PDF", 
-"streetAddress": "Street name + house number + postal code + city",
-"dateOfBirth": "DD.MM.YYYY",
-"nationality": "Nationality from the document",
-"workPermitDate": "Work Permit expiration or Kontrollfrist date (DD.MM.YYYY)",
-"workPermitType": "Type of permit, e.g., Niederlassungsbewilligung, Aufenthaltsbewilligung, Kurzaufenthaltsbewilligung"
-}
-
-Extraction Rules:
-- "Name / Nom / Cognome" → lastName
-- "Vorname / Prénom / Nome" → firstName  
-- "Geburtsdatum / Date de naissance / Data di nascita" → dateOfBirth
-- "Staatsangehörigkeit / Nationalité / Nazionalità" → nationality
-- "Kontrollfrist", "Gültig bis", or "Expiration" → workPermitDate
-- "Niederlassungsbewilligung", "Aufenthaltsbewilligung", or "Kurzaufenthaltsbewilligung" → workPermitType
-- Address is usually near "Strasse / Rue / Via" and may contain a postal code (e.g., 5103 Wildegg).
-`;
-
-        // 4️⃣ Send to GPT model
         const response = await client.chat.completions.create({
             model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: prompt },
-                        { type: "file", file: { file_id: uploadedFile.id } },
-                    ],
-                },
-            ],
+            messages: [{
+                role: "user",
+                content: [
+                    { type: "text", text: analysisPrompt },
+                    { type: "file", file: { file_id: uploadedFile.id } },
+                ],
+            }],
             max_tokens: 1000
         });
 
-        // 5️⃣ Parse and validate response
         const result = response.choices[0].message.content.trim();
-        console.log("📚 PDF Analysis Result:", result);
-
-        try {
-            const parsedResult = JSON.parse(result);
-            console.log("✅ Successfully parsed PDF analysis JSON");
-            return parsedResult;
-        } catch (parseError) {
-            console.error("❌ Failed to parse JSON response from PDF analysis:", parseError);
-            console.log("Raw response:", result);
-            throw new Error("Invalid JSON response from PDF analysis");
-        }
-
-    } catch (error) {
-        console.error("❌ Error analyzing PDF:", error);
-        throw error;
+        return JSON.parse(result);
     } finally {
         cleanupFile(tempPath);
     }
 }
 
-// Update HubSpot property
-async function updateProperty(objectType, objectId, propertyToBeUpdate, propertyValue) {
+// HubSpot functions
+async function updateProperty(objectType, objectId, propertyName, propertyValue) {
     const url = `https://api.hubapi.com/crm/v3/objects/${objectType}/${objectId}`;
-
-    // Determine the value to send based on data type
-    let valueToSend;
-
-    if (typeof propertyValue === 'object' && propertyValue !== null) {
-        // For objects/arrays, stringify them
-        valueToSend = JSON.stringify(propertyValue);
-    } else if (typeof propertyValue === 'string') {
-        // For strings, use as-is
-        valueToSend = propertyValue;
-    } else {
-        // For numbers, booleans, etc., use as-is
-        valueToSend = propertyValue;
-    }
 
     const requestBody = {
         properties: {
-            [propertyToBeUpdate]: valueToSend
+            [propertyName]: typeof propertyValue === 'object' ? JSON.stringify(propertyValue) : propertyValue
         }
     };
-
-    console.log(`🔄 Updating ${objectType} ${objectId} - Property: ${propertyToBeUpdate}, Value: ${typeof propertyValue === 'object' ? JSON.stringify(propertyValue) : propertyValue}`);
 
     const response = await fetch(url, {
         method: "PATCH",
         headers: {
-            "Authorization": `Bearer ${config.hubspotToken}`,
+            "Authorization": `Bearer ${hubspotToken}`,
             "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
     });
 
-    if (!response.ok) {
-        let errorData;
-        try {
-            errorData = await response.json();
-        } catch {
-            errorData = { message: 'Could not parse error response' };
-        }
-        console.error("❌ Failed to update property:", errorData);
-        throw new Error(`HubSpot update failed: ${response.status} - ${errorData.message || response.statusText}`);
-    }
+    if (!response.ok) throw new Error(`HubSpot update failed: ${response.status}`);
 
-    const data = await response.json();
-    console.log("✅ Successfully updated HubSpot property:", propertyToBeUpdate);
-    return data;
+    return await response.json();
 }
 
-// Property mapping function to convert extracted field names to HubSpot property names
-function mapPropertyName(extractedFieldName) {
-    const propertyMap = {
-        'firstName': 'extracted_full_name',  // Will combine with lastName
-        'lastName': 'extracted_full_name',   // Will combine with firstName
-        'streetAddress': 'extracted_address',
-        'dateOfBirth': 'extracted_dob',
-        'nationality': 'extracted_nationality',
-        'workPermitDate': 'extracted_work_permit_date',
-        'workPermitType': 'extracted_work_permit_type'
-    };
-
-    return propertyMap[extractedFieldName] || extractedFieldName;
-}
-
-// Function to combine first and last name into full name
-function combineFullName(extractedData) {
-    if (extractedData.firstName && extractedData.lastName) {
-        return `${extractedData.firstName} ${extractedData.lastName}`.trim();
-    } else if (extractedData.firstName) {
-        return extractedData.firstName;
-    } else if (extractedData.lastName) {
-        return extractedData.lastName;
-    }
-    return null;
-}
-
-// Function to update individual properties from extracted data
 async function updateIndividualProperties(objectTypeId, recordId, extractedData) {
-    const updates = [];
+    const fullName = [extractedData.firstName, extractedData.lastName].filter(Boolean).join(' ');
 
-    // Prepare special combined fields
-    const fullName = combineFullName(extractedData);
-
-    // Define all properties to update with their values
     const propertiesToUpdate = {
         'extracted_full_name': fullName,
         'extracted_address': extractedData.streetAddress,
@@ -411,290 +202,138 @@ async function updateIndividualProperties(objectTypeId, recordId, extractedData)
         'extracted_work_permit_type': extractedData.workPermitType
     };
 
-    for (const [hubspotPropertyName, propertyValue] of Object.entries(propertiesToUpdate)) {
+    const updates = [];
+
+    for (const [propertyName, propertyValue] of Object.entries(propertiesToUpdate)) {
+        if (propertyValue === null || propertyValue === undefined || propertyValue === '') continue;
+
         try {
-            // Skip null/undefined/empty values
-            if (propertyValue === null || propertyValue === undefined || propertyValue === '') {
-                console.log(`⏭️  Skipping empty property: ${hubspotPropertyName}`);
-                continue;
-            }
-
-            console.log(`📝 Updating property: ${hubspotPropertyName} = ${propertyValue}`);
-
-            // Update the individual property
-            const result = await updateProperty(objectTypeId, recordId, hubspotPropertyName, propertyValue);
-
-            updates.push({
-                property: hubspotPropertyName,
-                value: propertyValue,
-                success: true,
-                updateId: result.id
-            });
-
-            console.log(`✅ Successfully updated ${hubspotPropertyName}`);
-
-            // Add small delay to avoid rate limiting (100ms between requests)
-            await new Promise(resolve => setTimeout(resolve, 100));
-
+            await updateProperty(objectTypeId, recordId, propertyName, propertyValue);
+            updates.push({ property: propertyName, success: true });
+            await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
         } catch (error) {
-            console.error(`❌ Failed to update property ${hubspotPropertyName}:`, error.message);
-
-            updates.push({
-                property: hubspotPropertyName,
-                value: propertyValue,
-                success: false,
-                error: error.message
-            });
-
-            // Continue with other properties even if one fails
+            updates.push({ property: propertyName, success: false, error: error.message });
         }
     }
 
-    console.log(`✅ Individual property updates completed: ${updates.filter(u => u.success).length} successful, ${updates.filter(u => !u.success).length} failed`);
     return updates;
 }
 
-// Main processing function for webhook
+// Fixed email function with attachments
+async function sendEmailWithAttachment(to, subject, message, attachmentPath = null) {
+    if (!process.env.SMTP_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        throw new Error('Email configuration missing');
+    }
+
+    const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: process.env.SMTP_PORT || 587,
+        secure: process.env.SMTP_SECURE === "true",
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+        },
+    });
+
+    const mailOptions = {
+        from: `"Document Analysis" <${process.env.EMAIL_USER}>`,
+        to,
+        subject,
+        html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>${subject}</h2>
+        <p>${message}</p>
+        <p><small>Automated message from Document Analysis System</small></p>
+      </div>
+    `,
+    };
+
+    // Add attachment if provided and file exists
+    if (attachmentPath && fs.existsSync(attachmentPath)) {
+        mailOptions.attachments = [{
+            filename: `document_analysis_${path.basename(attachmentPath)}`,
+            path: attachmentPath,
+            contentType: getFileType(attachmentPath) === 'pdf' ? 'application/pdf' : 'image/jpeg'
+        }];
+    }
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ Email sent:", info.messageId);
+    return info;
+}
+
+// Main processing
 async function processWebhookData(webhookData) {
-    try {
-        console.log('🔔 Processing webhook data...');
+    const event = webhookData[0];
+    if (!event?.propertyValue) throw new Error('Invalid webhook data');
 
-        // Extract the first event from webhook array
-        const event = webhookData[0];
-        if (!event) {
-            throw new Error('No event data found in webhook');
-        }
+    const { fileId, objectTypeId, recordId } = parseFileRecordString(event.propertyValue);
+    const documentUrl = await getSignedFileUrl(fileId);
+    const fileType = getFileType(documentUrl);
 
-        // Get and parse the propertyValue
-        const { propertyValue, objectId } = event;
+    if (fileType === "unknown") throw new Error("Unsupported file type");
 
-        if (!propertyValue) {
-            throw new Error('propertyValue is missing in webhook data');
-        }
+    const extractedData = fileType === "image"
+        ? await analyzeImage(documentUrl)
+        : await analyzePDF(documentUrl);
 
-        console.log(`📥 Raw propertyValue: ${propertyValue}`);
+    console.log("📊 Extracted Data:", JSON.stringify(extractedData, null, 2));
 
-        // Parse the file record string
-        const { fileId, objectTypeId, recordId } = parseFileRecordString(propertyValue);
+    // Update HubSpot
+    await updateProperty(objectTypeId, recordId, "extracted_data", extractedData);
+    const individualUpdates = await updateIndividualProperties(objectTypeId, recordId, extractedData);
 
-        console.log(`📋 Parsed values:`, { fileId, objectTypeId, recordId });
-
-        // Get signed URL from HubSpot
-        const documentUrl = await getSignedFileUrl(fileId);
-
-        // Detect file type
-        const fileType = getFileType(documentUrl);
-        if (fileType === "unknown") {
-            throw new Error("Unsupported file type from HubSpot file");
-        }
-
-        console.log(`📄 File type detected: ${fileType}`);
-        console.log(`🔗 Document URL: ${documentUrl}`);
-
-        let extractedData;
-
-        // Analyze document based on type - BOTH now return structured JSON
-        if (fileType === "image") {
-            extractedData = await analyzeImage(documentUrl);
-        } else if (fileType === "pdf") {
-            extractedData = await analyzePDF(documentUrl);
-        }
-
-        console.log("📊 Extracted Data:", JSON.stringify(extractedData, null, 2));
-
-        // Update 1: Store the complete extracted data as JSON
-        console.log("💾 Storing complete extracted data...");
-        const updateResult = await updateProperty(objectTypeId, recordId, "extracted_data", extractedData);
-
-        // Update 2: If we have structured data, update individual properties
-        let individualUpdates = [];
-        if (typeof extractedData === 'object' && extractedData !== null && !Array.isArray(extractedData)) {
-            console.log("🔄 Looping through extracted data to update individual properties...");
-
-            individualUpdates = await updateIndividualProperties(objectTypeId, recordId, extractedData);
-        }
-
-        return {
-            success: true,
-            message: "Document analyzed and HubSpot updated successfully",
-            webhookEventId: event.eventId,
-            parsedData: {
-                fileId,
-                objectTypeId,
-                recordId
-            },
-            fileType,
-            extractedFields: {
-                fullName: combineFullName(extractedData),
-                address: extractedData.streetAddress,
-                dob: extractedData.dateOfBirth,
-                nationality: extractedData.nationality,
-                workPermitDate: extractedData.workPermitDate,
-                workPermitType: extractedData.workPermitType
-            },
-            hubspotUpdate: {
-                id: updateResult.id,
-                updatedAt: updateResult.updatedAt
-            },
-            individualUpdates: individualUpdates
-        };
-
-    } catch (error) {
-        console.error("❌ Webhook processing error:", error);
-        throw error;
-    }
+    return {
+        success: true,
+        parsedData: { fileId, objectTypeId, recordId },
+        fileType,
+        extractedFields: {
+            fullName: [extractedData.firstName, extractedData.lastName].filter(Boolean).join(' '),
+            address: extractedData.streetAddress,
+            dob: extractedData.dateOfBirth,
+            nationality: extractedData.nationality,
+            workPermitDate: extractedData.workPermitDate,
+            workPermitType: extractedData.workPermitType
+        },
+        individualUpdates
+    };
 }
 
-async function sendBeautifulEmail(to, subject, message, attachmentPath = null) {
-    try {
-        // 1️⃣ Configure SMTP
-        const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: process.env.SMTP_PORT || 587,
-            secure: process.env.SMTP_SECURE === "true",
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
-            },
-        });
-
-        // 2️⃣ Build HTML content
-        const htmlContent = `
-        <div style="font-family: Arial, sans-serif; background: #f5f6fa; padding: 30px;">
-            <div style="max-width: 600px; margin: auto; background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
-                <div style="background: linear-gradient(135deg, #6C63FF, #2C3E50); color: white; text-align: center; padding: 20px;">
-                    <h1 style="margin: 0;">✨ ${subject}</h1>
-                </div>
-
-                <div style="padding: 30px;">
-                    <p style="font-size: 16px; color: #333;">${message}</p>
-
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="https://yourwebsite.com" 
-                           style="background: #6C63FF; color: white; padding: 12px 25px; border-radius: 5px; text-decoration: none; font-weight: bold;">
-                           Visit Dashboard
-                        </a>
-                    </div>
-
-                    <p style="font-size: 14px; color: #777;">If you didn’t request this, please ignore this email.</p>
-                </div>
-
-                <div style="background: #f0f0f0; text-align: center; padding: 10px; font-size: 12px; color: #888;">
-                    &copy; ${new Date().getFullYear()} Your Company. All rights reserved.
-                </div>
-            </div>
-        </div>
-        `;
-
-        // 3️⃣ Setup mail options
-        const mailOptions = {
-            from: `"Your App" <${process.env.EMAIL_USER}>`,
-            to,
-            subject,
-            html: htmlContent,
-        };
-
-        // 4️⃣ Add attachment if provided
-        if (attachmentPath && fs.existsSync(attachmentPath)) {
-            mailOptions.attachments = [
-                {
-                    filename: path.basename(attachmentPath),
-                    path: attachmentPath
-                }
-            ];
-        }
-
-        // 5️⃣ Send the email
-        const info = await transporter.sendMail(mailOptions);
-        console.log("✅ Email sent:", info.messageId);
-        return info;
-
-    } catch (error) {
-        console.error("❌ Error sending email:", error);
-        throw error;
-    }
-}
-
-
-
-// Webhook endpoint for HubSpot
+// Webhook endpoint
 app.post('/webhook/hubspot', async (req, res) => {
-    // Set CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
     try {
         const webhookData = req.body;
 
-        if (!webhookData || !Array.isArray(webhookData) || webhookData.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid webhook data: expected array with at least one event'
-            });
+        if (!Array.isArray(webhookData) || webhookData.length === 0) {
+            return res.status(400).json({ success: false, error: 'Invalid webhook data' });
         }
-
-        console.log('📨 Webhook received:', {
-            eventId: webhookData[0].eventId,
-            objectId: webhookData[0].objectId,
-            propertyName: webhookData[0].propertyName
-        });
 
         const result = await processWebhookData(webhookData);
 
-        // Attach the original HubSpot document file to the email
-        const fileId = result?.parsedData?.fileId;
-        const signedUrl = fileId ? await getSignedFileUrl(fileId) : null;
+        // Send email with attachment
+        const { fileId } = result.parsedData;
+        const signedUrl = await getSignedFileUrl(fileId);
         const fileType = getFileType(signedUrl);
         const extension = fileType === "pdf" ? ".pdf" : ".jpg";
         const tempFilePath = generateTempPath(extension);
+
         await downloadFile(signedUrl, tempFilePath);
 
-        await sendBeautifulEmail(
+        await sendEmailWithAttachment(
             process.env.EMAIL_SEND_TO,
             "Document Analysis Completed",
-            `The document (type: ${fileType}) has been successfully analyzed.`,
-            tempFilePath // attach file
+            `The ${fileType} document has been successfully analyzed.`,
+            tempFilePath
         );
 
-        return res.status(200).json(result);
+        // Cleanup temp file after email is sent
+        cleanupFile(tempFilePath);
 
+        res.status(200).json(result);
 
     } catch (error) {
-        console.error('Error in webhook handler:', error);
-
-        return res.status(500).json({
-            success: false,
-            error: error.message,
-            eventId: req.body?.[0]?.eventId
-        });
-    }
-});
-
-// Legacy analyze endpoint (for backward compatibility)
-app.post('/api/analyze', async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    try {
-        // This endpoint now also expects webhook format
-        const result = await processWebhookData(req.body);
-        return res.status(200).json(result);
-    } catch (error) {
-        console.error('Error in analyze handler:', error);
-        return res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        console.error('Webhook error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -705,7 +344,5 @@ export default app;
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
-        console.log(`📨 Webhook endpoint: http://localhost:${PORT}/webhook/hubspot`);
-        console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
     });
 }
