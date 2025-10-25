@@ -27,8 +27,126 @@ if (!openaiApiKey || !hubspotToken) {
 // Initialize OpenAI client
 const client = new OpenAI({ apiKey: openaiApiKey });
 
-// Queue for background processing
-const processingQueue = new Map();
+// ==================== SIMPLE QUEUE SYSTEM ====================
+
+class SimpleQueue {
+  constructor() {
+    this.queue = [];
+    this.processing = false;
+    this.jobs = new Map(); // Store job status
+  }
+
+  async add(jobData) {
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const job = {
+      id: jobId,
+      data: jobData,
+      status: 'queued',
+      createdAt: new Date(),
+      attempts: 0,
+      maxAttempts: 3
+    };
+
+    this.queue.push(job);
+    this.jobs.set(jobId, job);
+    
+    console.log(`📥 Job added to queue: ${jobId}, Queue size: ${this.queue.length}`);
+    
+    // Start processing if not already running
+    if (!this.processing) {
+      this.processQueue();
+    }
+
+    return jobId;
+  }
+
+  async processQueue() {
+    if (this.processing || this.queue.length === 0) {
+      return;
+    }
+
+    this.processing = true;
+    console.log(`🔄 Queue processor started, ${this.queue.length} jobs in queue`);
+
+    while (this.queue.length > 0) {
+      const job = this.queue[0]; // Peek at first job
+      
+      try {
+        console.log(`🎯 Processing job: ${job.id}`);
+        job.status = 'processing';
+        job.startedAt = new Date();
+        job.attempts += 1;
+
+        // Process the job
+        const result = await processWebhookData(job.data);
+        
+        job.status = 'completed';
+        job.completedAt = new Date();
+        job.result = result;
+
+        console.log(`✅ Job completed: ${job.id}`);
+        
+        // Remove from queue after successful processing
+        this.queue.shift();
+
+      } catch (error) {
+        console.error(`❌ Job failed: ${job.id}`, error);
+        
+        if (job.attempts >= job.maxAttempts) {
+          job.status = 'failed';
+          job.error = error.message;
+          job.failedAt = new Date();
+          this.queue.shift(); // Remove from queue after max attempts
+          console.log(`💀 Job moved to failed state after ${job.attempts} attempts: ${job.id}`);
+        } else {
+          // Retry logic: move to end of queue
+          const failedJob = this.queue.shift();
+          this.queue.push(failedJob);
+          console.log(`🔄 Job queued for retry (${job.attempts}/${job.maxAttempts}): ${job.id}`);
+        }
+      }
+
+      // Small delay between jobs to prevent overwhelming the system
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    this.processing = false;
+    console.log('🏁 Queue processor finished');
+  }
+
+  getJob(jobId) {
+    return this.jobs.get(jobId);
+  }
+
+  getQueueStatus() {
+    return {
+      queued: this.queue.length,
+      processing: this.processing ? 1 : 0,
+      totalJobs: this.jobs.size,
+      completed: Array.from(this.jobs.values()).filter(job => job.status === 'completed').length,
+      failed: Array.from(this.jobs.values()).filter(job => job.status === 'failed').length
+    };
+  }
+
+  // Clean up old completed jobs (optional, to prevent memory leaks)
+  cleanupOldJobs(maxAgeHours = 24) {
+    const cutoffTime = Date.now() - (maxAgeHours * 60 * 60 * 1000);
+    
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.completedAt && job.completedAt.getTime() < cutoffTime) {
+        this.jobs.delete(jobId);
+      }
+    }
+  }
+}
+
+// Initialize the queue
+const jobQueue = new SimpleQueue();
+
+// Clean up old jobs every hour
+setInterval(() => {
+  jobQueue.cleanupOldJobs(1); // Keep jobs for 1 hour
+}, 60 * 60 * 1000);
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -161,7 +279,7 @@ async function analyzeImage(url) {
       ],
     }],
     max_tokens: 1000,
-    response_format: { type: "json_object" } // Force JSON response
+    response_format: { type: "json_object" }
   });
 
   const result = response.choices[0].message.content.trim();
@@ -200,7 +318,7 @@ async function analyzePDF(url) {
         ],
       }],
       max_tokens: 1000,
-      response_format: { type: "json_object" } // Force JSON response
+      response_format: { type: "json_object" }
     });
 
     const result = response.choices[0].message.content.trim();
@@ -316,11 +434,11 @@ async function sendEmailWithAttachment(to, subject, message, attachmentPath = nu
   return info;
 }
 
-// ==================== BACKGROUND PROCESSING ====================
+// ==================== MAIN PROCESSING FUNCTION ====================
 
 async function processWebhookData(webhookData) {
   try {
-    console.log('🔔 Processing webhook data in background...');
+    console.log('🔔 Processing webhook data...');
 
     const event = webhookData[0];
     if (!event) throw new Error('No event data found in webhook');
@@ -362,8 +480,6 @@ async function processWebhookData(webhookData) {
 
     cleanupFile(tempFilePath);
 
-    console.log("✅ Background processing completed successfully");
-
     return {
       success: true,
       message: "Document analyzed and HubSpot updated successfully",
@@ -373,9 +489,9 @@ async function processWebhookData(webhookData) {
     };
 
   } catch (error) {
-    console.error("❌ Background processing error:", error);
-
-    // You can also send an error email here if needed
+    console.error("❌ Webhook processing error:", error);
+    
+    // Send error email
     try {
       await sendEmailWithAttachment(
         process.env.EMAIL_SEND_TO,
@@ -385,51 +501,37 @@ async function processWebhookData(webhookData) {
     } catch (emailError) {
       console.error("❌ Failed to send error email:", emailError);
     }
-
+    
     throw error;
-  }
-}
-
-// Process jobs in the background
-async function processBackgroundJob(jobId, webhookData) {
-  try {
-    console.log(`🎯 Starting background job: ${jobId}`);
-    await processWebhookData(webhookData);
-    processingQueue.delete(jobId);
-    console.log(`✅ Background job completed: ${jobId}`);
-  } catch (error) {
-    console.error(`❌ Background job failed: ${jobId}`, error);
-    processingQueue.delete(jobId);
   }
 }
 
 // ==================== ROUTES ====================
 
 app.get('/', (req, res) => {
-  res.json({
-    message: 'Document Analysis API',
+  const queueStatus = jobQueue.getQueueStatus();
+  res.json({ 
+    message: 'Document Analysis API', 
     version: '1.0.0',
     status: 'running',
-    backgroundJobs: processingQueue.size
+    queue: queueStatus
   });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
+  const queueStatus = jobQueue.getQueueStatus();
+  res.json({ 
+    status: 'OK', 
     timestamp: new Date().toISOString(),
-    backgroundJobs: processingQueue.size
+    queue: queueStatus
   });
 });
 
-app.get('/api/queue', (req, res) => {
-  res.json({
-    queueSize: processingQueue.size,
-    activeJobs: Array.from(processingQueue.keys())
-  });
+app.get('/api/queue/status', (req, res) => {
+  res.json(jobQueue.getQueueStatus());
 });
 
-// Webhook endpoint - returns immediate response, processes in background
+// Webhook endpoint - adds to queue and responds immediately
 app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
@@ -439,60 +541,93 @@ app.post('/webhook/hubspot', async (req, res) => {
     }
 
     const event = webhookData[0];
-    const jobId = `${event.eventId}_${Date.now()}`;
+    const jobId = await jobQueue.add(webhookData);
 
-    console.log(`📨 Webhook received, starting background job: ${jobId}`);
-
-    // Add to processing queue
-    processingQueue.set(jobId, {
-      status: 'processing',
-      startedAt: new Date().toISOString(),
-      eventId: event.eventId
-    });
-
-    // Start background processing (non-blocking)
-    processBackgroundJob(jobId, webhookData).catch(error => {
-      console.error(`❌ Background job error for ${jobId}:`, error);
-    });
+    console.log('📨 Webhook received, added to queue:', jobId);
 
     // Immediate response to HubSpot
     res.status(202).json({
       success: true,
-      message: "Webhook received and processing started",
+      message: "Webhook received and queued for processing",
       jobId: jobId,
-      status: "processing",
+      status: "queued",
+      queuePosition: jobQueue.queue.length,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('Webhook initial processing error:', error);
+    console.error('❌ Error adding job to queue:', error);
+    
+    // Still respond successfully to HubSpot to avoid retries
     res.status(202).json({
       success: true,
-      message: "Webhook received, but initial validation had issues",
+      message: "Webhook received, but queue system had issues",
       error: error.message,
       timestamp: new Date().toISOString()
     });
   }
 });
 
-// Optional: Endpoint to check job status
+// Get job status
 app.get('/api/job/:jobId', (req, res) => {
-  const jobId = req.params.jobId;
-  const job = processingQueue.get(jobId);
+  try {
+    const job = jobQueue.getJob(req.params.jobId);
+    
+    if (!job) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Job not found' 
+      });
+    }
 
-  if (!job) {
-    return res.status(404).json({
-      success: false,
-      error: 'Job not found'
-    });
+    const response = {
+      jobId: job.id,
+      status: job.status,
+      createdAt: job.createdAt,
+      attempts: job.attempts,
+      maxAttempts: job.maxAttempts
+    };
+
+    if (job.startedAt) response.startedAt = job.startedAt;
+    if (job.completedAt) response.completedAt = job.completedAt;
+    if (job.failedAt) response.failedAt = job.failedAt;
+    if (job.error) response.error = job.error;
+    if (job.result) response.result = job.result;
+
+    res.json(response);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
+});
 
-  res.json({
-    jobId,
-    status: job.status,
-    startedAt: job.startedAt,
-    eventId: job.eventId
-  });
+// Manual job retry
+app.post('/api/job/:jobId/retry', async (req, res) => {
+  try {
+    const job = jobQueue.getJob(req.params.jobId);
+    
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (job.status !== 'failed') {
+      return res.status(400).json({ error: 'Only failed jobs can be retried' });
+    }
+
+    // Reset job status and add back to queue
+    job.status = 'queued';
+    job.attempts = 0;
+    job.error = undefined;
+    jobQueue.queue.push(job);
+
+    // Start processing if not already running
+    if (!jobQueue.processing) {
+      jobQueue.processQueue();
+    }
+
+    res.json({ success: true, message: 'Job queued for retry' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Export for Vercel
@@ -503,6 +638,6 @@ if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📨 Webhook endpoint: http://localhost:${PORT}/webhook/hubspot`);
-    console.log(`📊 Queue monitor: http://localhost:${PORT}/api/queue`);
+    console.log(`📊 Queue monitor: http://localhost:${PORT}/api/queue/status`);
   });
 }
