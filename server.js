@@ -185,6 +185,26 @@ async function getHubSpotRecord(objectType, objectId, queryParams = '') {
   return await response.json();
 }
 
+function getObjectTypeBySubscription(subscriptionType) {
+  const subscriptionMap = {
+    "contact.propertyChange": "0-1",
+    "company.propertyChange": "0-2",
+    "deal.propertyChange": "0-3",
+    "ticket.propertyChange": "0-5"
+  };
+
+  // If it's a standard type, return from map
+  if (subscriptionMap[subscriptionType]) {
+    return subscriptionMap[subscriptionType];
+  }
+
+  // If it's a custom object (ends with .propertyChange)
+  if (subscriptionType.endsWith('.propertyChange')) {
+    const objectName = subscriptionType.replace('.propertyChange', '');
+    return `p_${objectName}`;
+  }
+}
+
 // Email Function
 async function sendEmailWithAttachment(to, subject, message, attachmentPath = null) {
   if (!process.env.SMTP_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -224,11 +244,7 @@ async function processWebhookData(webhookData) {
 
   if (event.propertyName === "file_id") {
     const objectRecordId = event.objectId;
-    let objectType = "0-5"; // Default to any object
-    if (event.subscriptionType === "contact.propertyChange") objectType = "0-1";
-    else if (event.subscriptionType === "company.propertyChange") objectType = "0-2";
-    else if (event.subscriptionType === "deal.propertyChange") objectType = "0-3";
-
+    let objectType = getObjectTypeBySubscription(event.subscriptionType);
     const objectDetails = await getHubSpotRecord(objectType, objectRecordId, "file_id");
     const fileId = objectDetails.properties.file_id;
     const signedUrl = await getSignedFileUrl(fileId);
