@@ -329,8 +329,7 @@ async function processWebhookData(webhookData) {
 
     if (fileType === "unknown") throw new Error("Unsupported file type");
 
-    console.log(`📄 File Type: ${fileType}`);
-    console.log(`📄 File URL: ${documentUrl}`);
+    console.log(`📄 File type: ${fileType}, URL: ${documentUrl}`);
 
     let extractedData;
     if (fileType === "image") {
@@ -376,42 +375,43 @@ app.post('/webhook/hubspot', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid webhook data' });
     }
 
-    // ✅ Immediately acknowledge the webhook to HubSpot
-    res.status(204).end();
+    const result = await processWebhookData(webhookData);
 
-    // ⚙️ Continue processing asynchronously
-    processWebhookData(webhookData)
-      .then(async (result) => {
-        console.log("✅ Background processing complete:", result);
-
-        // Optional: send the email here
-        const { fileId } = result.parsedData;
-        const signedUrl = await getSignedFileUrl(fileId);
-        const fileType = getFileType(signedUrl);
-        const extension = fileType === "pdf" ? ".pdf" : ".jpg";
-        const tempFilePath = generateTempPath(extension);
-
-        await downloadFile(signedUrl, tempFilePath);
-
-        await sendEmailWithAttachment(
-          process.env.EMAIL_SEND_TO,
-          "Document Analysis Completed",
-          `The ${fileType} document has been successfully analyzed.`,
-          tempFilePath
-        );
-
-        cleanupFile(tempFilePath);
-      })
-      .catch((error) => {
-        console.error("❌ Background processing failed:", error);
-      });
+    res.status(200).json(result);
 
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error('Webhook error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
+app.post('/webhook/hubspot/email', async (req, res) => {
+  try {
+    const event = req[0];
+    if (!event) throw new Error('No event data found in webhook');
+    if (!event.propertyValue) throw new Error('propertyValue is missing');
+    const { fileId, objectTypeId, recordId } = parseFileRecordString(event.propertyValue);
+    const signedUrl = await getSignedFileUrl(fileId);
+    const fileType = getFileType(signedUrl);
+    const extension = fileType === "pdf" ? ".pdf" : ".jpg";
+    const tempFilePath = generateTempPath(extension);
+
+    await downloadFile(signedUrl, tempFilePath);
+
+    await sendEmailWithAttachment(
+      process.env.EMAIL_SEND_TO,
+      "Document Analysis Completed",
+      `The ${fileType} document has been successfully analyzed.`,
+      tempFilePath
+    );
+
+    cleanupFile(tempFilePath);
+
+  } catch (error) {
+    console.error("Email webhook error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Export for Vercel
 export default app;
