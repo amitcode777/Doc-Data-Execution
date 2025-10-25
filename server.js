@@ -27,6 +27,9 @@ if (!openaiApiKey || !hubspotToken) {
 // Initialize OpenAI client
 const client = new OpenAI({ apiKey: openaiApiKey });
 
+// Queue for background processing
+const processingQueue = new Map();
+
 // ==================== HELPER FUNCTIONS ====================
 
 function cleanJSONResponse(responseText) {
@@ -60,7 +63,7 @@ async function downloadFile(url, outputPath) {
     maxContentLength: 10 * 1024 * 1024,
     timeout: 30000
   });
-  
+
   const dir = path.dirname(outputPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(outputPath, response.data);
@@ -92,10 +95,10 @@ function cleanupFile(filePath) {
 function parseFileRecordString(inputString) {
   const parts = inputString.split(',');
   if (parts.length !== 3) throw new Error('Invalid input format');
-  
+
   const [fileId, objectTypeId, recordId] = parts.map(part => part.trim());
   if (!fileId || !objectTypeId || !recordId) throw new Error('All parts must be non-empty');
-  
+
   return { fileId, objectTypeId, recordId };
 }
 
@@ -108,10 +111,10 @@ async function getSignedFileUrl(fileId) {
   });
 
   if (!response.ok) throw new Error(`Failed to get signed URL: ${response.status}`);
-  
+
   const data = await response.json();
   if (!data.url) throw new Error('No URL found in response');
-  
+
   return data.url;
 }
 
@@ -181,7 +184,7 @@ async function analyzePDF(url) {
 
   try {
     await downloadFile(url, tempPath);
-    
+
     const uploadedFile = await client.files.create({
       file: fs.createReadStream(tempPath),
       purpose: "assistants",
@@ -221,7 +224,7 @@ async function analyzePDF(url) {
 
 async function updateProperty(objectType, objectId, propertyName, propertyValue) {
   const url = `https://api.hubapi.com/crm/v3/objects/${objectType}/${objectId}`;
-  
+
   const requestBody = {
     properties: {
       [propertyName]: typeof propertyValue === 'object' ? JSON.stringify(propertyValue) : propertyValue
@@ -238,13 +241,13 @@ async function updateProperty(objectType, objectId, propertyName, propertyValue)
   });
 
   if (!response.ok) throw new Error(`HubSpot update failed: ${response.status}`);
-  
+
   return await response.json();
 }
 
 async function updateIndividualProperties(objectTypeId, recordId, extractedData) {
   const fullName = [extractedData.firstName, extractedData.lastName].filter(Boolean).join(' ');
-  
+
   const propertiesToUpdate = {
     'extracted_full_name': fullName,
     'extracted_address': extractedData.streetAddress,
@@ -255,10 +258,10 @@ async function updateIndividualProperties(objectTypeId, recordId, extractedData)
   };
 
   const updates = [];
-  
+
   for (const [propertyName, propertyValue] of Object.entries(propertiesToUpdate)) {
     if (propertyValue === null || propertyValue === undefined || propertyValue === '') continue;
-    
+
     try {
       await updateProperty(objectTypeId, recordId, propertyName, propertyValue);
       updates.push({ property: propertyName, success: true });
@@ -267,7 +270,7 @@ async function updateIndividualProperties(objectTypeId, recordId, extractedData)
       updates.push({ property: propertyName, success: false, error: error.message });
     }
   }
-  
+
   return updates;
 }
 
@@ -313,11 +316,11 @@ async function sendEmailWithAttachment(to, subject, message, attachmentPath = nu
   return info;
 }
 
-// ==================== MAIN PROCESSING ====================
+// ==================== BACKGROUND PROCESSING ====================
 
 async function processWebhookData(webhookData) {
   try {
-    console.log('🔔 Processing webhook data...');
+    console.log('🔔 Processing webhook data in background...');
 
     const event = webhookData[0];
     if (!event) throw new Error('No event data found in webhook');
@@ -326,7 +329,7 @@ async function processWebhookData(webhookData) {
     const { fileId, objectTypeId, recordId } = parseFileRecordString(event.propertyValue);
     const documentUrl = await getSignedFileUrl(fileId);
     const fileType = getFileType(documentUrl);
-    
+
     if (fileType === "unknown") throw new Error("Unsupported file type");
 
     console.log(`📄 File type: ${fileType}, URL: ${documentUrl}`);
@@ -343,6 +346,24 @@ async function processWebhookData(webhookData) {
     await updateProperty(objectTypeId, recordId, "extracted_data", extractedData);
     const individualUpdates = await updateIndividualProperties(objectTypeId, recordId, extractedData);
 
+    // Send email with attachment
+    const signedUrl = await getSignedFileUrl(fileId);
+    const extension = fileType === "pdf" ? ".pdf" : ".jpg";
+    const tempFilePath = generateTempPath(extension);
+
+    await downloadFile(signedUrl, tempFilePath);
+
+    await sendEmailWithAttachment(
+      process.env.EMAIL_SEND_TO,
+      "Document Analysis Completed",
+      `The ${fileType} document has been successfully analyzed.`,
+      tempFilePath
+    );
+
+    cleanupFile(tempFilePath);
+
+    console.log("✅ Background processing completed successfully");
+
     return {
       success: true,
       message: "Document analyzed and HubSpot updated successfully",
@@ -352,55 +373,126 @@ async function processWebhookData(webhookData) {
     };
 
   } catch (error) {
-    console.error("❌ Webhook processing error:", error);
+    console.error("❌ Background processing error:", error);
+
+    // You can also send an error email here if needed
+    try {
+      await sendEmailWithAttachment(
+        process.env.EMAIL_SEND_TO,
+        "Document Analysis Failed",
+        `The document analysis failed with error: ${error.message}`
+      );
+    } catch (emailError) {
+      console.error("❌ Failed to send error email:", emailError);
+    }
+
     throw error;
+  }
+}
+
+// Process jobs in the background
+async function processBackgroundJob(jobId, webhookData) {
+  try {
+    console.log(`🎯 Starting background job: ${jobId}`);
+    await processWebhookData(webhookData);
+    processingQueue.delete(jobId);
+    console.log(`✅ Background job completed: ${jobId}`);
+  } catch (error) {
+    console.error(`❌ Background job failed: ${jobId}`, error);
+    processingQueue.delete(jobId);
   }
 }
 
 // ==================== ROUTES ====================
 
 app.get('/', (req, res) => {
-  res.json({ message: 'Document Analysis API', version: '1.0.0' });
+  res.json({
+    message: 'Document Analysis API',
+    version: '1.0.0',
+    status: 'running',
+    backgroundJobs: processingQueue.size
+  });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    backgroundJobs: processingQueue.size
+  });
 });
 
+app.get('/api/queue', (req, res) => {
+  res.json({
+    queueSize: processingQueue.size,
+    activeJobs: Array.from(processingQueue.keys())
+  });
+});
+
+// Webhook endpoint - returns immediate response, processes in background
 app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
-    
+
     if (!Array.isArray(webhookData) || webhookData.length === 0) {
       return res.status(400).json({ success: false, error: 'Invalid webhook data' });
     }
 
-    const result = await processWebhookData(webhookData);
-    
-    // Send email with attachment
-    const { fileId } = result.parsedData;
-    const signedUrl = await getSignedFileUrl(fileId);
-    const fileType = getFileType(signedUrl);
-    const extension = fileType === "pdf" ? ".pdf" : ".jpg";
-    const tempFilePath = generateTempPath(extension);
-    
-    await downloadFile(signedUrl, tempFilePath);
-    
-    await sendEmailWithAttachment(
-      process.env.EMAIL_SEND_TO,
-      "Document Analysis Completed",
-      `The ${fileType} document has been successfully analyzed.`,
-      tempFilePath
-    );
-    
-    cleanupFile(tempFilePath);
+    const event = webhookData[0];
+    const jobId = `${event.eventId}_${Date.now()}`;
 
-    res.status(200).json(result);
-    
+    console.log(`📨 Webhook received, starting background job: ${jobId}`);
+
+    // Add to processing queue
+    processingQueue.set(jobId, {
+      status: 'processing',
+      startedAt: new Date().toISOString(),
+      eventId: event.eventId
+    });
+
+    // Start background processing (non-blocking)
+    processBackgroundJob(jobId, webhookData).catch(error => {
+      console.error(`❌ Background job error for ${jobId}:`, error);
+    });
+
+    // Immediate response to HubSpot
+    res.status(202).json({
+      success: true,
+      message: "Webhook received and processing started",
+      jobId: jobId,
+      status: "processing",
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
-    console.error('Webhook error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Webhook initial processing error:', error);
+    res.status(202).json({
+      success: true,
+      message: "Webhook received, but initial validation had issues",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
+});
+
+// Optional: Endpoint to check job status
+app.get('/api/job/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  const job = processingQueue.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      error: 'Job not found'
+    });
+  }
+
+  res.json({
+    jobId,
+    status: job.status,
+    startedAt: job.startedAt,
+    eventId: job.eventId
+  });
 });
 
 // Export for Vercel
@@ -410,5 +502,7 @@ export default app;
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📨 Webhook endpoint: http://localhost:${PORT}/webhook/hubspot`);
+    console.log(`📊 Queue monitor: http://localhost:${PORT}/api/queue`);
   });
 }
