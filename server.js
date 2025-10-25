@@ -375,33 +375,42 @@ app.post('/webhook/hubspot', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid webhook data' });
     }
 
-    const result = await processWebhookData(webhookData);
+    // ✅ Immediately acknowledge the webhook to HubSpot
+    res.status(204).end();
 
-    // Send email with attachment
-    const { fileId } = result.parsedData;
-    const signedUrl = await getSignedFileUrl(fileId);
-    const fileType = getFileType(signedUrl);
-    const extension = fileType === "pdf" ? ".pdf" : ".jpg";
-    const tempFilePath = generateTempPath(extension);
+    // ⚙️ Continue processing asynchronously
+    processWebhookData(webhookData)
+      .then(async (result) => {
+        console.log("✅ Background processing complete:", result);
 
-    await downloadFile(signedUrl, tempFilePath);
+        // Optional: send the email here
+        const { fileId } = result.parsedData;
+        const signedUrl = await getSignedFileUrl(fileId);
+        const fileType = getFileType(signedUrl);
+        const extension = fileType === "pdf" ? ".pdf" : ".jpg";
+        const tempFilePath = generateTempPath(extension);
 
-    await sendEmailWithAttachment(
-      process.env.EMAIL_SEND_TO,
-      "Document Analysis Completed",
-      `The ${fileType} document has been successfully analyzed.`,
-      tempFilePath
-    );
+        await downloadFile(signedUrl, tempFilePath);
 
-    cleanupFile(tempFilePath);
+        await sendEmailWithAttachment(
+          process.env.EMAIL_SEND_TO,
+          "Document Analysis Completed",
+          `The ${fileType} document has been successfully analyzed.`,
+          tempFilePath
+        );
 
-    res.status(204).json(result);
+        cleanupFile(tempFilePath);
+      })
+      .catch((error) => {
+        console.error("❌ Background processing failed:", error);
+      });
 
   } catch (error) {
-    console.error('Webhook error:', error);
+    console.error("Webhook error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 // Export for Vercel
 export default app;
