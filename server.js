@@ -329,7 +329,8 @@ async function processWebhookData(webhookData) {
 
     if (fileType === "unknown") throw new Error("Unsupported file type");
 
-    console.log(`📄 File type: ${fileType}, URL: ${documentUrl}`);
+    console.log(`📄 File Type: ${fileType}`);
+    console.log(`📄 File URL: ${documentUrl}`);
 
     let extractedData;
     if (fileType === "image") {
