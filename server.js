@@ -421,7 +421,13 @@ async function processWebhookData(webhookData) {
     // If OpenAI analysis was successful, proceed with normal flow
     await updateProperty(objectTypeId, recordId, extractedDataProperty, extractedData);
     await updateProperty(objectTypeId, recordId, fileIdProperty, fileId);
-    await updateProperty(objectTypeId, recordId, extractedDataErrorLogProperty, "");
+
+    // For clear contact error log property values
+    const objectType = getObjectTypeBySubscription(event?.subscriptionType);
+    const objectRecordId = event?.objectId;
+    await updateProperty(objectType, objectRecordId, extractedDataErrorLogProperty, "");
+    
+    // Update individual properties
     const individualUpdates = await updateIndividualProperties(objectTypeId, recordId, extractedData);
 
     return {
