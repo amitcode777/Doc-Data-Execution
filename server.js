@@ -240,22 +240,22 @@ async function sendEmailWithAttachment(to, subject, message, attachmentPath = nu
 // Main Processing
 async function processWebhookData(webhookData) {
   const event = webhookData[0];
-  if (!event?.propertyValue) throw new Error('Invalid webhook data');
+  if (!event?.propertyValue) {
+    return { success: false, message: "No propertyValue in webhook data" };
+  }
 
   if (event.propertyName === "file_id") {
     const objectRecordId = event.objectId;
     let objectType = getObjectTypeBySubscription(event.subscriptionType);
     const objectDetails = await getHubSpotRecord(objectType, objectRecordId, "file_id");
-    const fileId = objectDetails.properties.file_id;
-
-    if (!fileId) {
+    if (!objectDetails?.properties?.file_id) {
       return {
         success: false,
         message: "No file_id found on the record",
         parsedData: { objectType, objectRecordId },
       };
     }
-
+    const fileId = objectDetails.properties.file_id;
     const signedUrl = await getSignedFileUrl(fileId);
     const fileType = getFileType(signedUrl);
     const tempFilePath = generateTempPath(fileType === "pdf" ? ".pdf" : ".jpg");
