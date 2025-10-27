@@ -334,7 +334,11 @@ async function processWebhookData(webhookData) {
   try {
     const event = webhookData[0];
     if (!event?.propertyValue) {
-      return res.status(204).send(); // Empty body
+      return {
+        success: false,
+        status_code: 204,
+        message: "No propertyValue in webhook data"
+      };
     }
 
     if (event?.propertyName === fileIdProperty) {
@@ -343,7 +347,11 @@ async function processWebhookData(webhookData) {
       const objectDetails = await getHubSpotRecord(objectType, objectRecordId, fileIdProperty);
 
       if (!objectDetails?.properties?.file_id) {
-        return res.status(204).send(); // Empty body
+        return {
+          success: false,
+          status_code: 204,
+          message: "No file_id found on the record"
+        };
       }
 
       const fileId = objectDetails?.properties?.file_id;
