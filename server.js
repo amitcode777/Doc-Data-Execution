@@ -343,9 +343,9 @@ async function processWebhookData(webhookData) {
 
     if (event?.propertyName === fileIdProperty) {
       recordId = event?.objectId;
-      console.log('Processing fileIdProperty event for recordId:', recordId);
       objectTypeId = getObjectTypeBySubscription(event?.subscriptionType);
       try {
+        console.log(`Fetching HubSpot record for objectTypeId: ${objectTypeId}, recordId: ${recordId}`);
         const objectDetails = await getHubSpotRecord(objectTypeId, recordId, fileIdProperty);
 
         if (!objectDetails?.properties?.file_id) {
@@ -368,7 +368,7 @@ async function processWebhookData(webhookData) {
           `The ${fileType} document has been successfully analyzed.`,
           tempFilePath
         );
-        
+
         await updateProperty(objectTypeId, recordId, extractedDataErrorLogProperty, "");
         cleanupFile(tempFilePath);
 
@@ -396,6 +396,7 @@ async function processWebhookData(webhookData) {
     const { fileId, objectTypeId: parsedObjectTypeId, recordId: parsedRecordId } = parseFileRecordString(event?.propertyValue);
     objectTypeId = parsedObjectTypeId;
     recordId = parsedRecordId;
+    console.log(`Parsed fileId: ${fileId}, objectTypeId: ${objectTypeId}, recordId: ${recordId}`);
 
     const documentUrl = await getSignedFileUrl(fileId);
     const fileType = getFileType(documentUrl);
