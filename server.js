@@ -368,6 +368,8 @@ async function processWebhookData(webhookData) {
           `The ${fileType} document has been successfully analyzed.`,
           tempFilePath
         );
+        
+        await updateProperty(objectTypeId, recordId, extractedDataErrorLogProperty, "");
         cleanupFile(tempFilePath);
 
         return {
@@ -418,6 +420,7 @@ async function processWebhookData(webhookData) {
     // If OpenAI analysis was successful, proceed with normal flow
     await updateProperty(objectTypeId, recordId, extractedDataProperty, extractedData);
     await updateProperty(objectTypeId, recordId, fileIdProperty, fileId);
+    await updateProperty(objectTypeId, recordId, extractedDataErrorLogProperty, "");
     const individualUpdates = await updateIndividualProperties(objectTypeId, recordId, extractedData);
 
     return {
