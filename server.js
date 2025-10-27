@@ -247,6 +247,15 @@ async function processWebhookData(webhookData) {
     let objectType = getObjectTypeBySubscription(event.subscriptionType);
     const objectDetails = await getHubSpotRecord(objectType, objectRecordId, "file_id");
     const fileId = objectDetails.properties.file_id;
+
+    if (!fileId) {
+      return {
+        success: false,
+        message: "No file_id found on the record",
+        parsedData: { objectType, objectRecordId },
+      };
+    }
+
     const signedUrl = await getSignedFileUrl(fileId);
     const fileType = getFileType(signedUrl);
     const tempFilePath = generateTempPath(fileType === "pdf" ? ".pdf" : ".jpg");
