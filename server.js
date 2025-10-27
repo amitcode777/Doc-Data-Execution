@@ -330,7 +330,7 @@ async function sendEmailWithAttachment(to, subject, message, attachmentPath = nu
 // Main Processing
 async function processWebhookData(webhookData) {
   let objectTypeId, recordId;
-
+  console.log('Processing webhook data:', JSON.stringify(webhookData, null, 2));
   try {
     const event = webhookData[0];
     if (!event?.propertyValue) {
@@ -342,38 +342,52 @@ async function processWebhookData(webhookData) {
     }
 
     if (event?.propertyName === fileIdProperty) {
-      const objectRecordId = event?.objectId;
-      let objectType = getObjectTypeBySubscription(event?.subscriptionType);
-      const objectDetails = await getHubSpotRecord(objectType, objectRecordId, fileIdProperty);
+      recordId = event?.objectId;
+      console.log('Processing fileIdProperty event for recordId:', recordId);
+      objectTypeId = getObjectTypeBySubscription(event?.subscriptionType);
+      try {
+        const objectDetails = await getHubSpotRecord(objectTypeId, recordId, fileIdProperty);
 
-      if (!objectDetails?.properties?.file_id) {
+        if (!objectDetails?.properties?.file_id) {
+          return {
+            success: false,
+            status_code: 204,
+            message: "No file_id found on the record"
+          };
+        }
+
+        const fileId = objectDetails?.properties?.file_id;
+        const signedUrl = await getSignedFileUrl(fileId);
+        const fileType = getFileType(signedUrl);
+        const tempFilePath = generateTempPath(fileType === "pdf" ? ".pdf" : ".jpg");
+
+        await downloadFile(signedUrl, tempFilePath);
+        await sendEmailWithAttachment(
+          emailSendTo,
+          "Document Analysis Completed",
+          `The ${fileType} document has been successfully analyzed.`,
+          tempFilePath
+        );
+        cleanupFile(tempFilePath);
+
         return {
-          success: false,
-          status_code: 204,
-          message: "No file_id found on the record"
+          success: true,
+          message: "Email sent successfully",
+          parsedData: { fileId, objectDetails, recordId },
+          fileType,
+        };
+      } catch (error) {
+        // If we have objectTypeIdId and recordId, update error log
+        if (objectTypeId && recordId) {
+          await updateErrorLog(objectTypeId, recordId, error.message);
+        } else {
+          console.error('Cannot update error log - missing objectTypeId or recordId');
+        }
+        return {
+          shouldReturn204: true,
+          message: "Processing failed, error recorded in error log property"
         };
       }
-
-      const fileId = objectDetails?.properties?.file_id;
-      const signedUrl = await getSignedFileUrl(fileId);
-      const fileType = getFileType(signedUrl);
-      const tempFilePath = generateTempPath(fileType === "pdf" ? ".pdf" : ".jpg");
-
-      await downloadFile(signedUrl, tempFilePath);
-      await sendEmailWithAttachment(
-        emailSendTo,
-        "Document Analysis Completed",
-        `The ${fileType} document has been successfully analyzed.`,
-        tempFilePath
-      );
-      cleanupFile(tempFilePath);
-
-      return {
-        success: true,
-        message: "Email sent successfully",
-        parsedData: { fileId, objectDetails, objectRecordId },
-        fileType,
-      };
     }
 
     // Parse file record and get object info for error logging
@@ -419,6 +433,8 @@ async function processWebhookData(webhookData) {
 
     // If we have objectTypeId and recordId, update error log
     if (objectTypeId && recordId) {
+      objectTypeId = getObjectTypeBySubscription(webhookData[0]?.subscriptionType);
+      recordId = webhookData[0]?.objectId;
       await updateErrorLog(objectTypeId, recordId, error.message);
     } else {
       console.error('Cannot update error log - missing objectTypeId or recordId');
