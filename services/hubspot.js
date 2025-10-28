@@ -48,6 +48,7 @@ export const fetchHubSpotAssociatedData = async (objectType, objectId, toObjectT
     const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${config.HUBSPOT_ACCESS_TOKEN}` }
     });
+    
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return response.json();
 };

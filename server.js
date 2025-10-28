@@ -1,5 +1,6 @@
 // server.js
 import express from 'express';
+import path from 'path'; // Add this import
 import config, { validateConfig } from './config/index.js';
 import { ERROR_MESSAGES } from './config/constants.js';
 
@@ -18,59 +19,26 @@ app.use(express.json({ limit: '10mb' }));
 
 // Business Logic
 const services = {
-  processWebhookData: async (webhookData) => {
-    const event = webhookData[0];
-    if (!event?.propertyValue) return { shouldReturn204: true, message: "No propertyValue" };
-
-    const { fileId, objectTypeId, recordId } = utils.parseFileRecordString(event.propertyValue);
-    const documentUrl = await hubspot.getSignedFileUrl(fileId);
-    const fileType = utils.getFileType(documentUrl);
-
-    if (fileType === "unknown") throw new Error(ERROR_MESSAGES.UNSUPPORTED_FILE_TYPE);
-
-    let extractedData;
-    try {
-      extractedData = fileType === "image"
-        ? await analysis.analyzeImage(documentUrl)
-        : await analysis.analyzePDF(documentUrl);
-    } catch (error) {
-      await hubspot.updateErrorLog(objectTypeId, recordId, error.message, { fileType });
-      return { shouldReturn204: true, message: "Analysis failed" };
-    }
-
-    await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.extractedData, extractedData);
-    await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.fileId, fileId);
-
-    // Update individual properties
-    await hubspot.updateIndividualProperties(objectTypeId, recordId, extractedData);
-
-    return {
-      success: true,
-      message: "Document analyzed and HubSpot updated successfully",
-      parsedData: { fileId, objectTypeId, recordId },
-      fileType
-    };
-  },
-
   sendEmailWithAttachments: async (req) => {
     let tempFiles = [];
 
     try {
       const contactDeal = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.contact,
-        req?.body?.contactId,
+        req.body.contactId,
         config.HUBSPOT_CONFIG.objectTypes.deal,
         1
       );
 
       const dealServices = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.deal,
-        contactDeal?.results[0]?.toObjectId,
+        contactDeal.results[0].toObjectId,
         config.HUBSPOT_CONFIG.objectTypes.service,
-        10
+        25
       );
 
       const serviceIds = dealServices.results.map(item => item.toObjectId);
+
       const serviceDetails = await hubspot.fetchHubSpotBatchRecords(
         config.HUBSPOT_CONFIG.objectTypes.service,
         serviceIds,
@@ -102,9 +70,9 @@ const services = {
 
       const attachments = processedFiles.filter(Boolean);
       const emailResult = await email.sendEmailWithAttachments(
-        req?.body.toEmail || config.EMAIL_CONFIG.sendTo,
+        req.body.toEmail || config.EMAIL_CONFIG.sendTo,
         'Document Analysis Report',
-        `Attached ${attachments.length} documents for review.`,
+        `Please find the attached documents for your review.`,
         attachments
       );
 
@@ -112,8 +80,8 @@ const services = {
 
       return {
         emailSent: true,
+        emailsSent: emailResult.emailsSent,
         filesProcessed: attachments.length,
-        emailId: emailResult.messageId,
         contactAssociatedDeal: contactDeal,
         dealAssociatedServiceObjects: dealServices,
         dealAssociatedServiceObjectIds: serviceIds,
@@ -135,7 +103,7 @@ app.get('/', (req, res) => res.json({
 
 app.post('/webhook/hubspot', async (req, res) => {
   try {
-    const webhookData = req?.body;
+    const webhookData = req.body;
     if (!Array.isArray(webhookData) || webhookData.length === 0) {
       console.error(ERROR_MESSAGES.INVALID_WEBHOOK);
       return res.status(204).send();
