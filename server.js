@@ -139,10 +139,12 @@ app.post('/webhook/hubspot', async (req, res) => {
     const webhookData = req.body;
     if (!Array.isArray(webhookData) || webhookData.length === 0) {
       console.error(ERROR_MESSAGES.INVALID_WEBHOOK);
-      return res.status(204).send();
+      return res.status(204).send(); // EXITS HERE
     }
 
-    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty) {
+    // Check if this is a deal property change webhook for email sending
+    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
+      webhookData[0].subscriptionType == "deal.propertyChange") {
 
       const dealContact = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.deal,
@@ -154,19 +156,21 @@ app.post('/webhook/hubspot', async (req, res) => {
 
       if (dealContact.results.length === 0) {
         console.error('No contact associated with the deal.');
-        return res.status(204).send();
+        return res.status(204).send(); // EXITS HERE
       }
 
       req.body["contactId"] = dealContact.results[0].toObjectId;
       const result = await services.sendEmailWithAttachments(req);
-      res.status(200).json(result);
+      return res.status(200).json(result); // EXITS HERE - processWebhookData WON'T RUN
     }
 
+    // This code ONLY runs if the above condition was NOT met
     const result = await services.processWebhookData(webhookData);
-    result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
+    return result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
+
   } catch (error) {
     console.error('Webhook error:', error);
-    res.status(204).send();
+    return res.status(204).send();
   }
 });
 
