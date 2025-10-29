@@ -19,6 +19,39 @@ app.use(express.json({ limit: '10mb' }));
 
 // Business Logic
 const services = {
+  processWebhookData: async (webhookData) => {
+    const event = webhookData[0];
+    if (!event?.propertyValue) return { shouldReturn204: true, message: "No propertyValue" };
+
+    const { fileId, objectTypeId, recordId } = utils.parseFileRecordString(event.propertyValue);
+    const documentUrl = await hubspot.getSignedFileUrl(fileId);
+    const fileType = utils.getFileType(documentUrl);
+
+    if (fileType === "unknown") throw new Error(ERROR_MESSAGES.UNSUPPORTED_FILE_TYPE);
+
+    let extractedData;
+    try {
+      extractedData = fileType === "image"
+        ? await analysis.analyzeImage(documentUrl)
+        : await analysis.analyzePDF(documentUrl);
+    } catch (error) {
+      await hubspot.updateErrorLog(objectTypeId, recordId, error.message, { fileType });
+      return { shouldReturn204: true, message: "Analysis failed" };
+    }
+
+    await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.extractedData, extractedData);
+    await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.fileId, fileId);
+
+    // Update individual properties
+    await hubspot.updateIndividualProperties(objectTypeId, recordId, extractedData);
+
+    return {
+      success: true,
+      message: "Document analyzed and HubSpot updated successfully",
+      parsedData: { fileId, objectTypeId, recordId },
+      fileType
+    };
+  },
   sendEmailWithAttachments: async (req) => {
     let tempFiles = [];
 
