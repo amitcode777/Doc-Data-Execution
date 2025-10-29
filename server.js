@@ -25,6 +25,8 @@ async function callInternalSendEmail(requestData) {
     const baseUrl = config.NODE_ENV === 'production'
       ? `https://${process.env.VERCEL_URL}`
       : `http://localhost:${config.PORT}`;
+      
+    console.log('Using base URL:', baseUrl);
 
     const response = await fetch(`${baseUrl}/api/send-email`, {
       method: 'POST',
@@ -39,7 +41,7 @@ async function callInternalSendEmail(requestData) {
     }
 
     const result = await response.json();
-    console.log('✅ Internal send-email API call successful');
+    console.log('✅ Internal send-email API call successful with data :', result);
     return result;
   } catch (error) {
     console.error('❌ Internal send-email API call failed:', error);
@@ -183,7 +185,7 @@ app.post('/webhook/hubspot', async (req, res) => {
         config.HUBSPOT_CONFIG.objectTypes.contact,
         1
       );
-      console.log('Deal associated contact:', dealContact);
+      // console.log('Deal associated contact:', dealContact);
 
       if (dealContact.results.length === 0) {
         console.error('No contact associated with the deal.');
@@ -191,7 +193,7 @@ app.post('/webhook/hubspot', async (req, res) => {
       }
 
       const contactId = dealContact?.results[0]?.toObjectId;
-
+      console.log('Contact id is:', contactId);
       // // Send immediate response to HubSpot
       // res.status(200).json({
       //   status: 'success',
@@ -208,14 +210,15 @@ app.post('/webhook/hubspot', async (req, res) => {
       };
 
       // Call internal send-email API in background with clean data
+      console.log("call callInternalSendEmail with", emailRequestData);
       callInternalSendEmail(emailRequestData)
         .then(result => {
           console.log('✅ Internal email processing completed', result);
-          hubspot.updateErrorLog("0-3", 46653763141, error.message);
+          // hubspot.updateErrorLog("0-3", 46653763141, error.message);
         })
         .catch(error => {
           console.error('❌ Internal email processing failed:', error);
-          hubspot.updateErrorLog("0-3", 46653763141, error.message);
+          // hubspot.updateErrorLog("0-3", 46653763141, error.message);
         });
 
       return res.status(200).json({
