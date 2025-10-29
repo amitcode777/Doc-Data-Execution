@@ -9,6 +9,8 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
   }
 
   const MAX_SIZE_PER_EMAIL = 4 * 1024 * 1024; // 4MB max per email
+  const DELAY_BETWEEN_EMAILS = 2000; // 2 seconds delay between emails
+
   const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
 
   // Split attachments into chunks based on size
@@ -19,7 +21,7 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
   for (const attachment of attachments) {
     try {
       const fileSize = fs.statSync(attachment.path).size;
-      
+
       if (currentSize + fileSize > MAX_SIZE_PER_EMAIL && currentChunk.length > 0) {
         emailChunks.push([...currentChunk]);
         currentChunk = [attachment];
@@ -37,9 +39,9 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
     emailChunks.push(currentChunk);
   }
 
-  // Send emails
+  // Send emails with delays
   const results = [];
-  
+
   for (let i = 0; i < emailChunks.length; i++) {
     const chunk = emailChunks[i];
     const emailSubject = emailChunks.length > 1 ? `${subject} (${i + 1}/${emailChunks.length})` : subject;
@@ -57,8 +59,20 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
       attachments: chunk
     };
 
-    const result = await transporter.sendMail(mailOptions);
-    results.push(result);
+    try {
+      const result = await transporter.sendMail(mailOptions);
+      results.push(result);
+      console.log(`✅ Sent email ${i + 1}/${emailChunks.length}`);
+
+      // Add delay between emails (except after the last one)
+      if (i < emailChunks.length - 1) {
+        console.log(`⏳ Waiting ${DELAY_BETWEEN_EMAILS}ms before next email...`);
+        await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_EMAILS));
+      }
+    } catch (error) {
+      console.error(`❌ Failed to send email ${i + 1}:`, error);
+      throw error;
+    }
   }
 
   return {
