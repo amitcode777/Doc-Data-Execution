@@ -139,7 +139,7 @@ app.post('/webhook/hubspot', async (req, res) => {
     const webhookData = req.body;
     if (!Array.isArray(webhookData) || webhookData.length === 0) {
       console.error(ERROR_MESSAGES.INVALID_WEBHOOK);
-      return res.status(204).send(); // EXITS HERE
+      return res.status(204).send();
     }
 
     // Check if this is a deal property change webhook for email sending
@@ -156,18 +156,25 @@ app.post('/webhook/hubspot', async (req, res) => {
 
       if (dealContact.results.length === 0) {
         console.error('No contact associated with the deal.');
-        return res.status(204).send(); // EXITS HERE
+        return res.status(204).send();
       }
 
-      // res.status(200).json({
-      //   status: 'accepted',
-      //   message: 'Email processing started in background'
-      // });
+      // For Vercel: Send immediate response and process in background
+      res.status(200).json({
+        status: 'accepted',
+        message: 'Email processing started in background',
+        contactId: dealContact.results[0].toObjectId
+      });
 
+      // Process email in background (don't await)
       req.body["contactId"] = dealContact.results[0].toObjectId;
-      const result = services.sendEmailWithAttachments(req);
-      console.log('Email sending initiated:', result);
-      return res.status(200).json(result); // EXITS HERE - processWebhookData WON'T RUN
+      services.sendEmailWithAttachments(req).then(result => {
+        console.log('✅ Background email processing completed:', result);
+      }).catch(error => {
+        console.error('❌ Background email processing failed:', error);
+      });
+
+      return; // Important: return after sending response
     }
 
     // This code ONLY runs if the above condition was NOT met
