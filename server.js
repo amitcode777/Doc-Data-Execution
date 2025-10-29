@@ -175,7 +175,6 @@ app.post('/webhook/hubspot', async (req, res) => {
       return res.status(204).send();
     }
 
-    // Check if this is a deal property change webhook for email sending
     if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
       webhookData[0].subscriptionType == "deal.propertyChange") {
 
@@ -192,32 +191,45 @@ app.post('/webhook/hubspot', async (req, res) => {
       }
 
       const contactId = dealContact?.results[0]?.toObjectId;
-      console.log('Contact id is:', contactId);
 
-      const emailRequestData = {
-        contactId: contactId,
-        toEmail: config.EMAIL_CONFIG.sendTo
-      };
-
-      // Send response FIRST
+      // Send immediate response
       res.status(200).json({
         status: 'success',
-        message: 'Email processing initiated via internal API',
+        message: 'Email processing initiated',
         contactId: contactId,
         timestamp: new Date().toISOString()
       });
 
-      // THEN start background process with setTimeout
-      setTimeout(() => {
-        console.log("Starting background email processing...");
-        callInternalSendEmail(emailRequestData)
-          .then(result => {
-            console.log('✅ Internal email processing completed', result);
-          })
-          .catch(error => {
-            console.error('❌ Internal email processing failed:', error);
-          });
-      }, 100); // Small delay to ensure response is sent
+      // Call external API (this creates a NEW function execution)
+      const baseUrl = config.NODE_ENV === 'production'
+        ? `https://${process.env.VERCEL_URL}`
+        : `http://localhost:${config.PORT}`;
+
+      console.log('baseUrl', baseUrl);
+
+      // This creates a NEW Vercel function execution
+      fetch(`${baseUrl}/api/send-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contactId: contactId,
+        })
+      })
+        .then(response => {
+          console.log('📨 Send-email API response status:', response.status);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(result => {
+          console.log('✅ Send-email API completed successfully:', result);
+        })
+        .catch(error => {
+          console.error('❌ Send-email API call failed:', error.message);
+        });
 
       return;
     }
@@ -233,8 +245,10 @@ app.post('/webhook/hubspot', async (req, res) => {
 });
 
 app.post('/api/send-email', async (req, res) => {
+  console.log('📥 /api/send-email called with body:', req.body);
   try {
     const result = await services.sendEmailWithAttachments(req);
+    console.log('✅ Email sent successfully with result:', result);
     res.status(200).json(result);
   } catch (error) {
     console.error('Email error:', error);
