@@ -1,4 +1,8 @@
-// services/email.js - Add file size check for Vercel
+// services/email.js
+import nodemailer from 'nodemailer';
+import fs from 'fs';
+import config from '../config/index.js';
+
 export const sendEmailWithAttachments = async (to, subject, message, attachments = []) => {
   if (!config.EMAIL_CONFIG.host || !config.EMAIL_CONFIG.auth.user || !config.EMAIL_CONFIG.auth.pass) {
     throw new Error('Email configuration missing');
@@ -6,21 +10,33 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
 
   const MAX_SIZE_PER_EMAIL = 4 * 1024 * 1024; // 4MB max per email
   const MAX_TOTAL_ATTACHMENTS = 5; // Limit total attachments for Vercel
-  
+
   const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
 
-  // Limit attachments for Vercel
-  const limitedAttachments = attachments.slice(0, MAX_TOTAL_ATTACHMENTS);
+  // Filter out invalid attachments and limit total
+  const validAttachments = attachments
+    .filter(attachment => {
+      try {
+        return fs.existsSync(attachment.path);
+      } catch {
+        return false;
+      }
+    })
+    .slice(0, MAX_TOTAL_ATTACHMENTS);
+
+  if (validAttachments.length === 0) {
+    throw new Error('No valid attachments found');
+  }
 
   // Split attachments into chunks based on size
   const emailChunks = [];
   let currentChunk = [];
   let currentSize = 0;
 
-  for (const attachment of limitedAttachments) {
+  for (const attachment of validAttachments) {
     try {
       const fileSize = fs.statSync(attachment.path).size;
-      
+
       if (currentSize + fileSize > MAX_SIZE_PER_EMAIL && currentChunk.length > 0) {
         emailChunks.push([...currentChunk]);
         currentChunk = [attachment];
@@ -40,7 +56,7 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
 
   // Send emails
   const results = [];
-  
+
   for (let i = 0; i < emailChunks.length; i++) {
     const chunk = emailChunks[i];
     const emailSubject = emailChunks.length > 1 ? `${subject} (${i + 1}/${emailChunks.length})` : subject;
@@ -58,12 +74,21 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
       attachments: chunk
     };
 
-    const result = await transporter.sendMail(mailOptions);
-    results.push(result);
+    try {
+      const result = await transporter.sendMail(mailOptions);
+      results.push(result);
+    } catch (error) {
+      console.error(`Failed to send email part ${i + 1}:`, error);
+      throw error; // Re-throw to handle in the main catch block
+    }
   }
 
   return {
     emailsSent: results.length,
-    totalAttachments: limitedAttachments.length
+    totalAttachments: validAttachments.length
   };
+};
+
+export default {
+  sendEmailWithAttachments
 };
