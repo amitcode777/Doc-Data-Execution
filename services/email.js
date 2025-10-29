@@ -10,7 +10,7 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
 
   // REDUCE THIS - account for email overhead
   const MAX_SIZE_PER_EMAIL = 3 * 1024 * 1024; // 3.5MB instead of 4MB
-  const DELAY_BETWEEN_EMAILS = 500; // 0.5 seconds
+  const DELAY_BETWEEN_EMAILS = 300; // 0.5 seconds
   
   const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
 

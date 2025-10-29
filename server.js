@@ -1,6 +1,6 @@
 // server.js
 import express from 'express';
-import path from 'path'; // Add this import
+import path from 'path';
 import config, { validateConfig } from './config/index.js';
 import { ERROR_MESSAGES } from './config/constants.js';
 
@@ -16,6 +16,28 @@ validateConfig();
 
 // Setup
 app.use(express.json({ limit: '10mb' }));
+
+// Background email processing function (standalone)
+async function processEmailBackground(contactId, dealId) {
+  console.log('🔄 Starting background email processing...');
+
+  try {
+    // Create a new request object for the background process
+    const backgroundReq = {
+      body: {
+        contactId: contactId,
+        toEmail: config.EMAIL_CONFIG.sendTo
+      }
+    };
+
+    const result = await services.sendEmailWithAttachments(backgroundReq);
+    console.log('🎉 Background email processing completed:', result);
+    return result;
+  } catch (error) {
+    console.error('❌ Background email processing failed:', error);
+    throw error;
+  }
+}
 
 // Business Logic
 const services = {
@@ -52,6 +74,7 @@ const services = {
       fileType
     };
   },
+
   sendEmailWithAttachments: async (req) => {
     let tempFiles = [];
 
@@ -159,25 +182,29 @@ app.post('/webhook/hubspot', async (req, res) => {
         return res.status(204).send();
       }
 
-      // For Vercel: Send immediate response and process in background
+      const contactId = dealContact.results[0].toObjectId;
+
+      // Send immediate success response to HubSpot
       res.status(200).json({
-        status: 'accepted',
-        message: 'Email processing started in background',
-        contactId: dealContact.results[0].toObjectId
+        status: 'success',
+        message: 'Email processing initiated',
+        contactId: contactId,
+        timestamp: new Date().toISOString()
       });
 
-      // Process email in background (don't await)
-      req.body["contactId"] = dealContact.results[0].toObjectId;
-      services.sendEmailWithAttachments(req).then(result => {
-        console.log('✅ Background email processing completed:', result);
-      }).catch(error => {
-        console.error('❌ Background email processing failed:', error);
-      });
+      // IMPORTANT: Don't await - let it run in background
+      processEmailBackground(contactId, webhookData[0].objectId)
+        .then(result => {
+          console.log('✅ Background email processing completed');
+        })
+        .catch(error => {
+          console.error('❌ Background email processing failed:', error);
+        });
 
-      return; // Important: return after sending response
+      return;
     }
 
-    // This code ONLY runs if the above condition was NOT met
+    // Regular webhook processing (this should be fast)
     const result = await services.processWebhookData(webhookData);
     return result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
 
