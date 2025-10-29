@@ -8,12 +8,15 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
     throw new Error('Email configuration missing');
   }
 
-  const MAX_SIZE_PER_EMAIL = 4 * 1024 * 1024; // 4MB max per email
-  const DELAY_BETWEEN_EMAILS = 2000; // 2 seconds delay between emails
-
+  // REDUCE THIS - account for email overhead
+  const MAX_SIZE_PER_EMAIL = 3 * 1024 * 1024; // 3.5MB instead of 4MB
+  const DELAY_BETWEEN_EMAILS = 500; // 0.5 seconds
+  
   const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
 
-  // Split attachments into chunks based on size
+  console.log(`📧 Processing ${attachments.length} attachments`);
+
+  // Split attachments into chunks with smaller size limit
   const emailChunks = [];
   let currentChunk = [];
   let currentSize = 0;
@@ -21,8 +24,19 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
   for (const attachment of attachments) {
     try {
       const fileSize = fs.statSync(attachment.path).size;
-
+      const fileSizeMB = (fileSize / 1024 / 1024).toFixed(2);
+      
+      console.log(`📄 ${attachment.filename}: ${fileSizeMB}MB`);
+      
+      // If single file is too large, skip it
+      if (fileSize > MAX_SIZE_PER_EMAIL) {
+        console.log(`❌ Skipping ${attachment.filename} - too large (${fileSizeMB}MB)`);
+        continue;
+      }
+      
+      // Check if adding this file would exceed limit
       if (currentSize + fileSize > MAX_SIZE_PER_EMAIL && currentChunk.length > 0) {
+        console.log(`📦 Created chunk ${emailChunks.length + 1} with ${currentChunk.length} files (${(currentSize / 1024 / 1024).toFixed(2)}MB)`);
         emailChunks.push([...currentChunk]);
         currentChunk = [attachment];
         currentSize = fileSize;
@@ -31,19 +45,33 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
         currentSize += fileSize;
       }
     } catch (error) {
-      console.error(`Error reading file: ${attachment.filename}`);
+      console.error(`Error reading file: ${attachment.filename}`, error);
     }
   }
 
+  // Don't forget the last chunk
   if (currentChunk.length > 0) {
+    console.log(`📦 Created final chunk ${emailChunks.length + 1} with ${currentChunk.length} files (${(currentSize / 1024 / 1024).toFixed(2)}MB)`);
     emailChunks.push(currentChunk);
   }
 
-  // Send emails with delays
-  const results = [];
+  console.log(`📨 Total chunks: ${emailChunks.length}`);
 
+  // Send emails
+  const results = [];
+  
   for (let i = 0; i < emailChunks.length; i++) {
     const chunk = emailChunks[i];
+    const chunkSizeMB = (chunk.reduce((sum, att) => {
+      try {
+        return sum + fs.statSync(att.path).size;
+      } catch {
+        return sum;
+      }
+    }, 0) / 1024 / 1024).toFixed(2);
+    
+    console.log(`✉️ Sending email ${i + 1}/${emailChunks.length} with ${chunk.length} files (${chunkSizeMB}MB)`);
+
     const emailSubject = emailChunks.length > 1 ? `${subject} (${i + 1}/${emailChunks.length})` : subject;
 
     const mailOptions = {
@@ -63,21 +91,24 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
       const result = await transporter.sendMail(mailOptions);
       results.push(result);
       console.log(`✅ Sent email ${i + 1}/${emailChunks.length}`);
-
-      // Add delay between emails (except after the last one)
+      
+      // Add delay between emails
       if (i < emailChunks.length - 1) {
-        console.log(`⏳ Waiting ${DELAY_BETWEEN_EMAILS}ms before next email...`);
         await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_EMAILS));
       }
     } catch (error) {
       console.error(`❌ Failed to send email ${i + 1}:`, error);
-      throw error;
+      // You might want to break or continue based on your needs
+      throw error; // Re-throw to see the actual error
     }
   }
 
+  console.log(`🎉 Completed: ${results.length}/${emailChunks.length} emails sent`);
+  
   return {
     emailsSent: results.length,
-    totalAttachments: attachments.length
+    totalAttachments: attachments.length,
+    chunksCreated: emailChunks.length
   };
 };
 

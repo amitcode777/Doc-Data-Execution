@@ -159,9 +159,14 @@ app.post('/webhook/hubspot', async (req, res) => {
         return res.status(204).send(); // EXITS HERE
       }
 
+      res.status(200).json({
+        status: 'accepted',
+        message: 'Email processing started in background'
+      });
+
       req.body["contactId"] = dealContact.results[0].toObjectId;
-      const result = await services.sendEmailWithAttachments(req);
-      return res.status(200).json(result); // EXITS HERE - processWebhookData WON'T RUN
+      services.sendEmailWithAttachments(req);
+      return; // EXITS HERE - processWebhookData WON'T RUN
     }
 
     // This code ONLY runs if the above condition was NOT met
