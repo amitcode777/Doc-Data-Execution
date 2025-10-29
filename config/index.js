@@ -33,7 +33,8 @@ export const HUBSPOT_CONFIG = {
     properties: {
         errorLog: "extracted_data_error_log",
         extractedData: "extracted_data",
-        fileId: "file_id"
+        fileId: "file_id",
+        webhookProperty: "test_webhook",
     },
     objectTypes: {
         contact: "0-1",

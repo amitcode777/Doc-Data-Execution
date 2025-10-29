@@ -142,6 +142,26 @@ app.post('/webhook/hubspot', async (req, res) => {
       return res.status(204).send();
     }
 
+    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty) {
+
+      const dealContact = await hubspot.fetchHubSpotAssociatedData(
+        config.HUBSPOT_CONFIG.objectTypes.deal,
+        webhookData[0].objectId,
+        config.HUBSPOT_CONFIG.objectTypes.contact,
+        1
+      );
+      console.log('Deal associated contact:', dealContact);
+
+      if (dealContact.results.length === 0) {
+        console.error('No contact associated with the deal.');
+        return res.status(204).send();
+      }
+
+      req.body["contactId"] = dealContact.results[0].toObjectId;
+      const result = await services.sendEmailWithAttachments(req);
+      res.status(200).json(result);
+    }
+
     const result = await services.processWebhookData(webhookData);
     result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
   } catch (error) {
