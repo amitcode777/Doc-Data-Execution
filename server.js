@@ -192,13 +192,13 @@ app.post('/webhook/hubspot', async (req, res) => {
 
       const contactId = dealContact?.results[0]?.toObjectId;
 
-      // Send immediate response to HubSpot
-      res.status(200).json({
-        status: 'success',
-        message: 'Email processing initiated via internal API',
-        contactId: contactId,
-        timestamp: new Date().toISOString()
-      });
+      // // Send immediate response to HubSpot
+      // res.status(200).json({
+      //   status: 'success',
+      //   message: 'Email processing initiated via internal API',
+      //   contactId: contactId,
+      //   timestamp: new Date().toISOString()
+      // });
 
       // Create a clean data object to pass to the internal API
       const emailRequestData = {
@@ -218,7 +218,12 @@ app.post('/webhook/hubspot', async (req, res) => {
           hubspot.updateErrorLog("0-3", 46653763141, error.message);
         });
 
-      return;
+      return res.status(200).json({
+        status: 'success',
+        message: 'Email processing initiated via internal API',
+        contactId: contactId,
+        timestamp: new Date().toISOString()
+      });;
     }
 
     // Regular webhook processing (this should be fast)
