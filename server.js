@@ -31,7 +31,7 @@ async function callInternalSendEmail(requestData) {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody) // Now this is safe
+      body: JSON.stringify(requestData) // Now this is safe
     });
 
     if (!response.ok) {
