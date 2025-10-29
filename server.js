@@ -17,38 +17,6 @@ validateConfig();
 // Setup
 app.use(express.json({ limit: '10mb' }));
 
-// Helper function to make internal API calls
-async function callInternalSendEmail(requestData) {
-  try {
-    console.log('📤 Calling internal send-email API with data:', requestData);
-
-    const baseUrl = config.NODE_ENV === 'production'
-      ? `https://${process.env.VERCEL_URL}`
-      : `http://localhost:${config.PORT}`;
-
-    console.log('Using base URL:', baseUrl);
-
-    const response = await fetch(`${baseUrl}/api/send-email`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestData) // Now this is safe
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('✅ Internal send-email API call successful with data :', result);
-    return result;
-  } catch (error) {
-    console.error('❌ Internal send-email API call failed:', error);
-    throw error;
-  }
-}
-
 // Business Logic
 const services = {
   processWebhookData: async (webhookData) => {
@@ -170,11 +138,14 @@ app.get('/', (req, res) => res.json({
 app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
-    if (!Array.isArray(webhookData) || webhookData.length === 0) {
-      console.error(ERROR_MESSAGES.INVALID_WEBHOOK);
-      return res.status(204).send();
-    }
 
+    // Immediate response
+    res.status(200).json({
+      status: 'success',
+      message: 'Webhook received, processing...'
+    });
+
+    // Then process everything
     if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
       webhookData[0].subscriptionType == "deal.propertyChange") {
 
@@ -185,62 +156,58 @@ app.post('/webhook/hubspot', async (req, res) => {
         1
       );
 
-      if (dealContact.results.length === 0) {
-        console.error('No contact associated with the deal.');
-        return res.status(204).send();
-      }
+      if (dealContact.results.length > 0) {
+        const contactId = dealContact.results[0].toObjectId;
 
-      const contactId = dealContact?.results[0]?.toObjectId;
-
-      // Send immediate response
-      res.status(200).json({
-        status: 'success',
-        message: 'Email processing initiated',
-        contactId: contactId,
-        timestamp: new Date().toISOString()
-      });
-
-      // Call external API (this creates a NEW function execution)
-      const baseUrl = config.NODE_ENV === 'production'
-        ? `https://${process.env.VERCEL_URL}`
-        : `http://localhost:${config.PORT}`;
-
-      console.log('baseUrl', baseUrl);
-
-      // This creates a NEW Vercel function execution
-      fetch(`${baseUrl}/api/send-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contactId: contactId,
-        })
-      })
-        .then(response => {
-          console.log('📨 Send-email API response status:', response.status);
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          return response.json();
-        })
-        .then(result => {
-          console.log('✅ Send-email API completed successfully:', result);
-        })
-        .catch(error => {
-          console.error('❌ Send-email API call failed:', error.message);
+        // Process email directly
+        await services.sendEmailWithAttachments({
+          body: { contactId }
         });
-
-      return;
+      }
+    } else {
+      // Regular processing
+      await services.processWebhookData(webhookData);
     }
 
-    // Regular webhook processing
-    const result = await services.processWebhookData(webhookData);
-    return result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+  }
+}); app.post('/webhook/hubspot', async (req, res) => {
+  try {
+    const webhookData = req.body;
+
+    // Immediate response
+    res.status(200).json({
+      status: 'success',
+      message: 'Webhook received, processing...'
+    });
+
+    // Then process everything
+    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
+      webhookData[0].subscriptionType == "deal.propertyChange") {
+
+      const dealContact = await hubspot.fetchHubSpotAssociatedData(
+        config.HUBSPOT_CONFIG.objectTypes.deal,
+        webhookData[0].objectId,
+        config.HUBSPOT_CONFIG.objectTypes.contact,
+        1
+      );
+
+      if (dealContact.results.length > 0) {
+        const contactId = dealContact.results[0].toObjectId;
+
+        // Process email directly
+        await services.sendEmailWithAttachments({
+          body: { contactId }
+        });
+      }
+    } else {
+      // Regular processing
+      await services.processWebhookData(webhookData);
+    }
 
   } catch (error) {
-    console.error('Webhook error:', error);
-    return res.status(204).send();
+    console.error('Webhook processing error:', error);
   }
 });
 
