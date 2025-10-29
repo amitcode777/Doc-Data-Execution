@@ -1,22 +1,23 @@
-// services/email.js
-import nodemailer from 'nodemailer';
-import fs from 'fs';
-import config from '../config/index.js';
-
+// services/email.js - Add file size check for Vercel
 export const sendEmailWithAttachments = async (to, subject, message, attachments = []) => {
   if (!config.EMAIL_CONFIG.host || !config.EMAIL_CONFIG.auth.user || !config.EMAIL_CONFIG.auth.pass) {
     throw new Error('Email configuration missing');
   }
 
   const MAX_SIZE_PER_EMAIL = 4 * 1024 * 1024; // 4MB max per email
+  const MAX_TOTAL_ATTACHMENTS = 5; // Limit total attachments for Vercel
+  
   const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
+
+  // Limit attachments for Vercel
+  const limitedAttachments = attachments.slice(0, MAX_TOTAL_ATTACHMENTS);
 
   // Split attachments into chunks based on size
   const emailChunks = [];
   let currentChunk = [];
   let currentSize = 0;
 
-  for (const attachment of attachments) {
+  for (const attachment of limitedAttachments) {
     try {
       const fileSize = fs.statSync(attachment.path).size;
       
@@ -63,10 +64,6 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
 
   return {
     emailsSent: results.length,
-    totalAttachments: attachments.length
+    totalAttachments: limitedAttachments.length
   };
-};
-
-export default {
-  sendEmailWithAttachments
 };

@@ -15,11 +15,8 @@ export const downloadAndSaveFile = async (signedUrl, fileId) => {
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  // Create temporary file with proper extension
-  const tempDir = path.join(process.cwd(), 'temp');
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-  }
+  // Use /tmp directory which is writable in Vercel
+  const tempDir = '/tmp';
 
   const fileExtension = path.extname(new URL(signedUrl).pathname) || '.pdf';
   const tempFilePath = path.join(tempDir, `hubspot_file_${fileId}_${Date.now()}${fileExtension}`);
@@ -51,8 +48,14 @@ export const cleanJSONResponse = (responseText) => {
 
 export const downloadFile = async (url, outputPath) => {
   const response = await axios.get(url, { responseType: "arraybuffer", timeout: 30000 });
+  // For Vercel, ensure outputPath is in /tmp directory
   const dir = path.dirname(outputPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(dir)) {
+    // Only create directory if it doesn't exist and is in /tmp
+    if (dir.startsWith('/tmp')) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
   fs.writeFileSync(outputPath, response.data);
 };
 
@@ -68,12 +71,14 @@ export const getFileType = (url) => {
   }
 };
 
-export const generateTempPath = (extension = ".tmp") => 
+export const generateTempPath = (extension = ".tmp") =>
   `/tmp/file_${Date.now()}_${Math.random().toString(36).substring(2, 15)}${extension}`;
 
-export const cleanupFile = (filePath) => {
+export const cleanupFile = async (filePath) => {
   try {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (fs.existsSync(filePath)) {
+      await fsAsync.unlink(filePath);
+    }
   } catch (error) {
     console.error('Error cleaning up file:', error);
   }
