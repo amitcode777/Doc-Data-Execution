@@ -22,12 +22,16 @@ async function callInternalSendEmail(requestData) {
   try {
     console.log('📤 Calling internal send-email API with data:', requestData);
 
-    const response = await fetch(`http://localhost:${config.PORT}/api/send-email`, {
+    const baseUrl = config.NODE_ENV === 'production'
+      ? `https://${process.env.VERCEL_URL}`
+      : `http://localhost:${config.PORT}`;
+
+    const response = await fetch(`${baseUrl}/api/send-email`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestData) // Pass the clean data object
+      body: JSON.stringify(requestBody) // Now this is safe
     });
 
     if (!response.ok) {
