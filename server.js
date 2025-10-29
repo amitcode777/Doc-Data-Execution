@@ -17,24 +17,28 @@ validateConfig();
 // Setup
 app.use(express.json({ limit: '10mb' }));
 
-// Background email processing function (standalone)
-async function processEmailBackground(contactId, dealId) {
-  console.log('🔄 Starting background email processing...');
-
+// Helper function to make internal API calls
+async function callInternalSendEmail(requestData) {
   try {
-    // Create a new request object for the background process
-    const backgroundReq = {
-      body: {
-        contactId: contactId,
-        toEmail: config.EMAIL_CONFIG.sendTo
-      }
-    };
+    console.log('📤 Calling internal send-email API with data:', requestData);
 
-    const result = await services.sendEmailWithAttachments(backgroundReq);
-    console.log('🎉 Background email processing completed:', result);
+    const response = await fetch(`http://localhost:${config.PORT}/api/send-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestData) // Pass the clean data object
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Internal send-email API call successful');
     return result;
   } catch (error) {
-    console.error('❌ Background email processing failed:', error);
+    console.error('❌ Internal send-email API call failed:', error);
     throw error;
   }
 }
@@ -126,7 +130,7 @@ const services = {
 
       const attachments = processedFiles.filter(Boolean);
       const emailResult = await email.sendEmailWithAttachments(
-        req.body.toEmail || config.EMAIL_CONFIG.sendTo,
+        config.EMAIL_CONFIG.sendTo,
         'Document Analysis Report',
         `Please find the attached documents for your review.`,
         attachments
@@ -182,23 +186,30 @@ app.post('/webhook/hubspot', async (req, res) => {
         return res.status(204).send();
       }
 
-      const contactId = dealContact.results[0].toObjectId;
+      const contactId = dealContact?.results[0]?.toObjectId;
 
-      // Send immediate success response to HubSpot
+      // Send immediate response to HubSpot
       res.status(200).json({
         status: 'success',
-        message: 'Email processing initiated',
+        message: 'Email processing initiated via internal API',
         contactId: contactId,
         timestamp: new Date().toISOString()
       });
 
-      // IMPORTANT: Don't await - let it run in background
-      processEmailBackground(contactId, webhookData[0].objectId)
+      // Create a clean data object to pass to the internal API
+      const emailRequestData = {
+        contactId: contactId,
+        toEmail: config.EMAIL_CONFIG.sendTo
+        // Add any other data your send-email route needs from the original request
+      };
+
+      // Call internal send-email API in background with clean data
+      callInternalSendEmail(emailRequestData)
         .then(result => {
-          console.log('✅ Background email processing completed');
+          console.log('✅ Internal email processing completed', result);
         })
         .catch(error => {
-          console.error('❌ Background email processing failed:', error);
+          console.error('❌ Internal email processing failed:', error);
         });
 
       return;
