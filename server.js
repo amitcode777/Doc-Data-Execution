@@ -211,9 +211,11 @@ app.post('/webhook/hubspot', async (req, res) => {
       callInternalSendEmail(emailRequestData)
         .then(result => {
           console.log('✅ Internal email processing completed', result);
+          hubspot.updateErrorLog("0-3", 46653763141, error.message);
         })
         .catch(error => {
           console.error('❌ Internal email processing failed:', error);
+          hubspot.updateErrorLog("0-3", 46653763141, error.message);
         });
 
       return;
