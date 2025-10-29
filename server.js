@@ -25,7 +25,7 @@ async function callInternalSendEmail(requestData) {
     const baseUrl = config.NODE_ENV === 'production'
       ? `https://${process.env.VERCEL_URL}`
       : `http://localhost:${config.PORT}`;
-      
+
     console.log('Using base URL:', baseUrl);
 
     const response = await fetch(`${baseUrl}/api/send-email`, {
@@ -185,7 +185,6 @@ app.post('/webhook/hubspot', async (req, res) => {
         config.HUBSPOT_CONFIG.objectTypes.contact,
         1
       );
-      // console.log('Deal associated contact:', dealContact);
 
       if (dealContact.results.length === 0) {
         console.error('No contact associated with the deal.');
@@ -194,42 +193,36 @@ app.post('/webhook/hubspot', async (req, res) => {
 
       const contactId = dealContact?.results[0]?.toObjectId;
       console.log('Contact id is:', contactId);
-      // // Send immediate response to HubSpot
-      // res.status(200).json({
-      //   status: 'success',
-      //   message: 'Email processing initiated via internal API',
-      //   contactId: contactId,
-      //   timestamp: new Date().toISOString()
-      // });
 
-      // Create a clean data object to pass to the internal API
       const emailRequestData = {
         contactId: contactId,
         toEmail: config.EMAIL_CONFIG.sendTo
-        // Add any other data your send-email route needs from the original request
       };
 
-      // Call internal send-email API in background with clean data
-      console.log("call callInternalSendEmail with", emailRequestData);
-      callInternalSendEmail(emailRequestData)
-        .then(result => {
-          console.log('✅ Internal email processing completed', result);
-          // hubspot.updateErrorLog("0-3", 46653763141, error.message);
-        })
-        .catch(error => {
-          console.error('❌ Internal email processing failed:', error);
-          // hubspot.updateErrorLog("0-3", 46653763141, error.message);
-        });
-
-      return res.status(200).json({
+      // Send response FIRST
+      res.status(200).json({
         status: 'success',
         message: 'Email processing initiated via internal API',
         contactId: contactId,
         timestamp: new Date().toISOString()
-      });;
+      });
+
+      // THEN start background process with setTimeout
+      setTimeout(() => {
+        console.log("Starting background email processing...");
+        callInternalSendEmail(emailRequestData)
+          .then(result => {
+            console.log('✅ Internal email processing completed', result);
+          })
+          .catch(error => {
+            console.error('❌ Internal email processing failed:', error);
+          });
+      }, 100); // Small delay to ensure response is sent
+
+      return;
     }
 
-    // Regular webhook processing (this should be fast)
+    // Regular webhook processing
     const result = await services.processWebhookData(webhookData);
     return result.shouldReturn204 ? res.status(204).send() : res.status(200).json(result);
 
