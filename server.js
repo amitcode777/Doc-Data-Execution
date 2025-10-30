@@ -170,7 +170,7 @@ app.post('/webhook/hubspot', async (req, res) => {
         //   body: { contactId }
         // });
 
-        services.sendEmailBackground(contactId);
+        await services.sendEmailBackground(contactId);
 
         return res.status(200).json({
           status: 'success',
