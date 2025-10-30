@@ -3,6 +3,7 @@ import emailQueue from './queue.js';
 import * as hubspot from './hubspot.js';
 import * as emailService from './email.js';
 import * as utils from '../utils/helpers.js';
+import config from '../config/index.js';
 
 export const queueEmailForContact = async (contactId) => {
     const task = async () => {
