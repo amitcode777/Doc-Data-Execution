@@ -10,6 +10,8 @@ import * as analysis from './services/analysis.js';
 import * as email from './services/email.js';
 import * as utils from './utils/helpers.js';
 
+import { queueEmailForContact, getQueueStatus, clearQueue } from './services/backgroundEmail.js';
+
 // Initialize
 const app = express();
 validateConfig();
@@ -19,19 +21,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // Business Logic
 const services = {
-  sendEmailBackground: async (contactId) => {
-    // Small delay to ensure webhook response is sent first
-    await new Promise(resolve => setTimeout(resolve, 100));
 
-    try {
-      const result = await services.sendEmailWithAttachments({
-        body: { contactId }
-      });
-      console.log('✅ Background email processing completed:', result);
-    } catch (error) {
-      console.error('❌ Background email processing failed:', error);
-    }
-  },
   processWebhookData: async (webhookData) => {
     const event = webhookData[0];
     if (!event?.propertyValue) return { shouldReturn204: true, message: "No propertyValue" };
@@ -152,7 +142,6 @@ app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
 
-    // Then process everything
     if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
       webhookData[0].subscriptionType == "deal.propertyChange") {
 
@@ -166,21 +155,19 @@ app.post('/webhook/hubspot', async (req, res) => {
       if (dealContact.results.length > 0) {
         const contactId = dealContact.results[0].toObjectId;
 
-        // await services.sendEmailWithAttachments({
-        //   body: { contactId }
-        // });
-
-        await services.sendEmailBackground(contactId);
+        // Queue email processing and return immediate response
+        const queueResult = await queueEmailForContact(contactId);
 
         return res.status(200).json({
           status: 'success',
-          message: 'Webhook received, processing...'
+          message: 'Webhook received, email processing queued',
+          queueInfo: queueResult,
+          immediateResponse: true
         });
       }
     } else {
-      // Regular processing
+      // Regular processing (fast, so we await it)
       await services.processWebhookData(webhookData);
-
       return res.status(200).json({
         status: 'success',
         message: 'Webhook received, processing...'
@@ -189,7 +176,24 @@ app.post('/webhook/hubspot', async (req, res) => {
 
   } catch (error) {
     console.error('Webhook processing error:', error);
+    res.status(500).json({
+      error: 'Webhook processing failed',
+      details: error.message
+    });
   }
+});
+
+// Add queue monitoring endpoints (optional)
+app.get('/queue/status', (req, res) => {
+  res.json(getQueueStatus());
+});
+
+app.delete('/queue/clear', (req, res) => {
+  const cleared = clearQueue();
+  res.json({
+    message: 'Queue cleared successfully',
+    clearedItems: cleared
+  });
 });
 
 app.post('/api/send-email', async (req, res) => {
