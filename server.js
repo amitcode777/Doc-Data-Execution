@@ -159,7 +159,7 @@ app.post('/webhook/hubspot', async (req, res) => {
 
         // Trigger background function
         try {
-          const backgroundResponse = await fetch(`${process.env.VERCEL_URL}/api/background-email`, {
+          const backgroundResponse = await fetch(`${process.env.URL}/api/background-email`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
