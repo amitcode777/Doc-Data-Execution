@@ -4,6 +4,7 @@ import * as hubspot from "../../../../services/hubspot.js";
 import config from "../../../../config/index.js";
 
 export default worker(async (job) => {
+    console.log("Processing queued job:", job.payload);
     const { contactId } = job.payload;
     console.log("📨 Processing queued email job for contact:", contactId);
 
