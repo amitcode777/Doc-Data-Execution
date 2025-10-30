@@ -1,4 +1,4 @@
-import { worker } from "@vercel/queues";
+import { worker } from "@vercel/queue";
 import * as email from "../../../../services/email.js";
 import * as hubspot from "../../../../services/hubspot.js";
 import config from "../../../../config/index.js";
