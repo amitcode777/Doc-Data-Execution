@@ -1,4 +1,5 @@
 // services/backgroundEmail.js
+import path from 'path';
 import emailQueue from './queue.js';
 import * as hubspot from './hubspot.js';
 import * as emailService from './email.js';
