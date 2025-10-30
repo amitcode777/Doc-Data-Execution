@@ -9,7 +9,7 @@ import * as hubspot from './services/hubspot.js';
 import * as analysis from './services/analysis.js';
 import * as email from './services/email.js';
 import * as utils from './utils/helpers.js';
-
+import { emailQueue } from "./api/queues/emailQueue/index.js";
 // Initialize
 const app = express();
 validateConfig();
@@ -139,16 +139,10 @@ app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
 
-    // Immediate response
-    res.status(200).json({
-      status: 'success',
-      message: 'Webhook received, processing...'
-    });
-
-    // Then process everything
-    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
-      webhookData[0].subscriptionType == "deal.propertyChange") {
-
+    if (
+      webhookData[0].propertyName === config.HUBSPOT_CONFIG.properties.webhookProperty &&
+      webhookData[0].subscriptionType === "deal.propertyChange"
+    ) {
       const dealContact = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.deal,
         webhookData[0].objectId,
@@ -159,57 +153,31 @@ app.post('/webhook/hubspot', async (req, res) => {
       if (dealContact.results.length > 0) {
         const contactId = dealContact.results[0].toObjectId;
 
-        // Process email directly
-        await services.sendEmailWithAttachments({
-          body: { contactId }
+        // ✅ Queue the background job
+        await emailQueue.send({ contactId });
+
+        return res.status(202).json({
+          status: "queued",
+          message: "Email job queued successfully",
+          contactId
         });
       }
-    } else {
-      // Regular processing
-      await services.processWebhookData(webhookData);
     }
 
-  } catch (error) {
-    console.error('Webhook processing error:', error);
-  }
-}); app.post('/webhook/hubspot', async (req, res) => {
-  try {
-    const webhookData = req.body;
+    // Regular document processing
+    await services.processWebhookData(webhookData);
 
-    // Immediate response
     res.status(200).json({
-      status: 'success',
-      message: 'Webhook received, processing...'
+      status: "success",
+      message: "Webhook received and processed."
     });
 
-    // Then process everything
-    if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
-      webhookData[0].subscriptionType == "deal.propertyChange") {
-
-      const dealContact = await hubspot.fetchHubSpotAssociatedData(
-        config.HUBSPOT_CONFIG.objectTypes.deal,
-        webhookData[0].objectId,
-        config.HUBSPOT_CONFIG.objectTypes.contact,
-        1
-      );
-
-      if (dealContact.results.length > 0) {
-        const contactId = dealContact.results[0].toObjectId;
-
-        // Process email directly
-        await services.sendEmailWithAttachments({
-          body: { contactId }
-        });
-      }
-    } else {
-      // Regular processing
-      await services.processWebhookData(webhookData);
-    }
-
   } catch (error) {
-    console.error('Webhook processing error:', error);
+    console.error("Webhook error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
+
 
 app.post('/api/send-email', async (req, res) => {
   console.log('📥 /api/send-email called with body:', req.body);
