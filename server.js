@@ -138,6 +138,7 @@ app.get('/', (req, res) => res.json({
   environment: config.NODE_ENV
 }));
 
+// server.js - Update webhook route
 app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
@@ -154,19 +155,39 @@ app.post('/webhook/hubspot', async (req, res) => {
 
       if (dealContact.results.length > 0) {
         const contactId = dealContact.results[0].toObjectId;
+        const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Queue email processing and return immediate response
-        const queueResult = await queueEmailForContact(contactId);
+        // Trigger background function
+        try {
+          const backgroundResponse = await fetch(`${process.env.VERCEL_URL}/api/background-email`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ contactId, taskId })
+          });
 
-        return res.status(200).json({
-          status: 'success',
-          message: 'Webhook received, email processing queued',
-          queueInfo: queueResult,
-          immediateResponse: true
-        });
+          if (backgroundResponse.ok) {
+            return res.status(200).json({
+              status: 'success',
+              message: 'Webhook received, background processing started',
+              taskId,
+              contactId,
+              background: true
+            });
+          }
+        } catch (bgError) {
+          console.error('Failed to trigger background function:', bgError);
+          // Fallback to immediate response without processing
+          return res.status(200).json({
+            status: 'success',
+            message: 'Webhook received (background processing failed)',
+            contactId
+          });
+        }
       }
     } else {
-      // Regular processing (fast, so we await it)
+      // Regular processing (fast operations)
       await services.processWebhookData(webhookData);
       return res.status(200).json({
         status: 'success',
@@ -176,10 +197,7 @@ app.post('/webhook/hubspot', async (req, res) => {
 
   } catch (error) {
     console.error('Webhook processing error:', error);
-    res.status(500).json({
-      error: 'Webhook processing failed',
-      details: error.message
-    });
+    res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
 
@@ -194,6 +212,113 @@ app.delete('/queue/clear', (req, res) => {
     message: 'Queue cleared successfully',
     clearedItems: cleared
   });
+});
+
+// server.js - Add this endpoint
+app.post('/api/background-email', async (req, res) => {
+  // This header tells Vercel to run this as a background function
+  res.setHeader('x-vercel-background', '1');
+
+  const { contactId, taskId } = req.body;
+
+  console.log(`🚀 Background function started for contact: ${contactId}`);
+
+  try {
+    // Immediate response - function continues running in background
+    res.status(202).json({
+      status: 'accepted',
+      message: 'Background processing started',
+      taskId,
+      contactId
+    });
+
+    // Actual processing after response
+    let tempFiles = [];
+    try {
+      console.log(`📧 Processing email for contact: ${contactId}`);
+
+      const contactDeal = await hubspot.fetchHubSpotAssociatedData(
+        config.HUBSPOT_CONFIG.objectTypes.contact,
+        contactId,
+        config.HUBSPOT_CONFIG.objectTypes.deal,
+        1
+      );
+
+      if (!contactDeal.results.length) {
+        throw new Error(`No deal found for contact: ${contactId}`);
+      }
+
+      const dealId = contactDeal.results[0].toObjectId;
+
+      const dealServices = await hubspot.fetchHubSpotAssociatedData(
+        config.HUBSPOT_CONFIG.objectTypes.deal,
+        dealId,
+        config.HUBSPOT_CONFIG.objectTypes.service,
+        25
+      );
+
+      const serviceIds = dealServices.results.map(item => item.toObjectId);
+
+      if (serviceIds.length === 0) {
+        throw new Error(`No services found for deal: ${dealId}`);
+      }
+
+      const serviceDetails = await hubspot.fetchHubSpotBatchRecords(
+        config.HUBSPOT_CONFIG.objectTypes.service,
+        serviceIds,
+        [config.HUBSPOT_CONFIG.properties.fileId],
+        false
+      );
+
+      // Process files
+      const processedFiles = await Promise.all(
+        serviceDetails.results.map(async (service) => {
+          const fileId = service.properties.file_id;
+          if (!fileId) return null;
+
+          try {
+            const signedUrl = await hubspot.getSignedFileUrl(fileId);
+            const tempPath = await utils.downloadAndSaveFile(signedUrl, fileId);
+            tempFiles.push(tempPath);
+
+            return {
+              filename: `document_${fileId}${path.extname(new URL(signedUrl).pathname) || '.pdf'}`,
+              path: tempPath
+            };
+          } catch (error) {
+            console.error(`File processing failed: ${fileId}`, error);
+            return null;
+          }
+        })
+      );
+
+      const attachments = processedFiles.filter(Boolean);
+
+      if (attachments.length === 0) {
+        throw new Error('No valid files found to attach');
+      }
+
+      // Send email
+      const emailResult = await email.sendEmailWithAttachments(
+        config.EMAIL_CONFIG.sendTo,
+        'Document Analysis Report',
+        `Please find the attached documents for your review.`,
+        attachments
+      );
+
+      await utils.cleanupTempFiles(tempFiles);
+
+      console.log(`✅ Background email completed for contact: ${contactId}`, emailResult);
+
+    } catch (error) {
+      await utils.cleanupTempFiles(tempFiles);
+      console.error(`❌ Background email failed for contact: ${contactId}`, error);
+    }
+
+  } catch (error) {
+    console.error('Background endpoint error:', error);
+    res.status(500).json({ error: 'Failed to start background processing' });
+  }
 });
 
 app.post('/api/send-email', async (req, res) => {

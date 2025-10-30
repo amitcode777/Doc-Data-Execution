@@ -2,21 +2,40 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
-    },
-    {
       "src": "server.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
+      "src": "/webhook/hubspot",
+      "methods": [
+        "POST"
+      ],
+      "dest": "/server.js"
     },
     {
-      "src": "/(.*)",
+      "src": "/api/send-email",
+      "methods": [
+        "POST"
+      ],
+      "dest": "/server.js"
+    },
+    {
+      "src": "/api/background-email",
+      "methods": [
+        "POST"
+      ],
+      "dest": "/server.js",
+      "headers": {
+        "x-vercel-background": "1"
+      }
+    },
+    {
+      "src": "/queue/status",
+      "methods": [
+        "GET"
+      ],
       "dest": "/server.js"
     }
   ]
