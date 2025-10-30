@@ -3,6 +3,7 @@ import nodemailer from 'nodemailer';
 import fs from 'fs';
 import config from '../config/index.js';
 
+
 export const sendEmailWithAttachments = async (to, subject, message, attachments = []) => {
   if (!config.EMAIL_CONFIG.host || !config.EMAIL_CONFIG.auth.user || !config.EMAIL_CONFIG.auth.pass) {
     throw new Error('Email configuration missing');
