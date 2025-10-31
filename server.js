@@ -145,6 +145,8 @@ app.post('/webhook/hubspot', async (req, res) => {
 
     if (webhookData[0].propertyName == config.HUBSPOT_CONFIG.properties.webhookProperty &&
       webhookData[0].subscriptionType == "deal.propertyChange") {
+      console.log('🔔 Webhook received for deal property change:', webhookData);
+
 
       const dealContact = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.deal,
@@ -152,39 +154,90 @@ app.post('/webhook/hubspot', async (req, res) => {
         config.HUBSPOT_CONFIG.objectTypes.contact,
         1
       );
+      console.log('🔗 Associated contact fetched for deal:', dealContact);
 
       if (dealContact.results.length > 0) {
         const contactId = dealContact.results[0].toObjectId;
-        const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`🚀 Queueing background email for contact: ${contactId}`);
 
-        // Trigger background function
-        try {
-          const backgroundResponse = await fetch(`${process.env.URL}/api/background-email`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ contactId, taskId })
-          });
+        const contactDeal = await hubspot.fetchHubSpotAssociatedData(
+          config.HUBSPOT_CONFIG.objectTypes.contact,
+          contactId,
+          config.HUBSPOT_CONFIG.objectTypes.deal,
+          1
+        );
+        console.log('🔗 Associated deal fetched for contact:', contactDeal);
 
-          if (backgroundResponse.ok) {
-            return res.status(200).json({
-              status: 'success',
-              message: 'Webhook received, background processing started',
-              taskId,
-              contactId,
-              background: true
-            });
-          }
-        } catch (bgError) {
-          console.error('Failed to trigger background function:', bgError);
-          // Fallback to immediate response without processing
-          return res.status(200).json({
-            status: 'success',
-            message: 'Webhook received (background processing failed)',
-            contactId
-          });
+        if (!contactDeal.results.length) {
+          throw new Error(`No deal found for contact: ${contactId}`);
         }
+
+        const dealId = contactDeal.results[0].toObjectId;
+        console.log(`📧 Processing deal id: ${dealId}`);
+
+        const dealServices = await hubspot.fetchHubSpotAssociatedData(
+          config.HUBSPOT_CONFIG.objectTypes.deal,
+          dealId,
+          config.HUBSPOT_CONFIG.objectTypes.service,
+          25
+        );
+        console.log('🔗 Associated services fetched for deal:', dealServices);
+
+        const serviceIds = dealServices.results.map(item => item.toObjectId);
+        console.log(`🛠️ Service IDs associated with deal:`, serviceIds);
+
+        if (serviceIds.length === 0) {
+          throw new Error(`No services found for deal: ${dealId}`);
+        }
+
+        const serviceDetails = await hubspot.fetchHubSpotBatchRecords(
+          config.HUBSPOT_CONFIG.objectTypes.service,
+          serviceIds,
+          [config.HUBSPOT_CONFIG.properties.fileId],
+          false
+        );
+        console.log('🗂️ Fetched service details for services:', serviceDetails);
+        
+        let tempFiles = [];
+        // Process files
+        const processedFiles = await Promise.all(
+          serviceDetails.results.map(async (service) => {
+            const fileId = service.properties.file_id;
+            if (!fileId) return null;
+
+            try {
+              const signedUrl = await hubspot.getSignedFileUrl(fileId);
+              const tempPath = await utils.downloadAndSaveFile(signedUrl, fileId);
+              tempFiles.push(tempPath);
+
+              return {
+                filename: `document_${fileId}${path.extname(new URL(signedUrl).pathname) || '.pdf'}`,
+                path: tempPath
+              };
+            } catch (error) {
+              console.error(`File processing failed: ${fileId}`, error);
+              return null;
+            }
+          })
+        );
+
+        const attachments = processedFiles.filter(Boolean);
+
+        if (attachments.length === 0) {
+          throw new Error('No valid files found to attach');
+        }
+
+        // Send email
+        const emailResult = await email.sendEmailWithAttachments(
+          config.EMAIL_CONFIG.sendTo,
+          'Document Analysis Report',
+          `Please find the attached documents for your review.`,
+          attachments
+        );
+
+        await utils.cleanupTempFiles(tempFiles);
+
+        console.log(`✅ Background email completed for contact: ${contactId}`, emailResult);
       }
     } else {
       // Regular processing (fast operations)
