@@ -197,7 +197,7 @@ app.post('/webhook/hubspot', async (req, res) => {
           false
         );
         console.log('🗂️ Fetched service details for services:', serviceDetails);
-        
+
         let tempFiles = [];
         // Process files
         const processedFiles = await Promise.all(
@@ -238,13 +238,18 @@ app.post('/webhook/hubspot', async (req, res) => {
         await utils.cleanupTempFiles(tempFiles);
 
         console.log(`✅ Background email completed for contact: ${contactId}`, emailResult);
+
+        return res.status(200).json({
+          status: 'success',
+          message: 'Webhook received, completed...'
+        });
       }
     } else {
       // Regular processing (fast operations)
       await services.processWebhookData(webhookData);
       return res.status(200).json({
         status: 'success',
-        message: 'Webhook received, processing...'
+        message: 'Webhook received, completed...'
       });
     }
 
