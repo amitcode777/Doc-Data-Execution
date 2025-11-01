@@ -433,7 +433,7 @@ app.post('/webhook/hubspot', async (req, res) => {
         console.log(`🚀 Starting background process for contact: ${contactId}`);
 
         // Call only the fetch-service-details API (which will call the others)
-        await callInternalAPI('/api/services/fetch-service-details', {
+        callInternalAPI('/api/services/fetch-service-details', {
           contactId
         });
 
