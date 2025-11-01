@@ -352,7 +352,7 @@ const sendServiceDocumentsEmail = async (attachments, tempFiles, contactId = nul
     }
 
     // Send email with attachments
-    emailResult = await email.sendEmailWithAttachments(
+    emailResult = email.sendEmailWithAttachments(
       config.EMAIL_CONFIG.sendTo,
       'Document Analysis Report',
       `Please find the attached documents for your review. Total documents: ${attachments.length}`,
