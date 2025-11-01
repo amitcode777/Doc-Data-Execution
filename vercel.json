@@ -9,34 +9,41 @@
   "routes": [
     {
       "src": "/webhook/hubspot",
-      "methods": [
-        "POST"
-      ],
-      "dest": "/server.js"
+      "dest": "/server.js",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/api/services/fetch-service-details",
+      "dest": "/server.js",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/api/services/process-files",
+      "dest": "/server.js",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/api/services/send-email",
+      "dest": "/server.js",
+      "methods": ["POST"]
     },
     {
       "src": "/api/send-email",
-      "methods": [
-        "POST"
-      ],
-      "dest": "/server.js"
-    },
-    {
-      "src": "/api/background-email",
-      "methods": [
-        "POST"
-      ],
       "dest": "/server.js",
-      "headers": {
-        "x-vercel-background": "1"
-      }
+      "methods": ["POST"]
     },
     {
-      "src": "/queue/status",
-      "methods": [
-        "GET"
-      ],
+      "src": "/(.*)",
       "dest": "/server.js"
     }
-  ]
+  ],
+  "functions": {
+    "server.js": {
+      "maxDuration": 120,
+      "memory": 1536
+    }
+  },
+  "env": {
+    "NODE_ENV": "production"
+  }
 }
