@@ -352,7 +352,7 @@ const sendServiceDocumentsEmail = async (attachments, tempFiles, contactId = nul
     }
 
     // Send email with attachments
-    emailResult = email.sendEmailWithAttachments(
+    emailResult = await email.sendEmailWithAttachments(
       config.EMAIL_CONFIG.sendTo,
       'Document Analysis Report',
       `Please find the attached documents for your review. Total documents: ${attachments.length}`,
@@ -362,14 +362,14 @@ const sendServiceDocumentsEmail = async (attachments, tempFiles, contactId = nul
     console.log('✅ Email sent successfully, cleaning up temporary files');
 
     // Cleanup temporary files after successful email send
-    cleanupSuccess = await utils.cleanupTempFiles(tempFiles);
+    cleanupSuccess = utils.cleanupTempFiles(tempFiles);
 
     console.log('✅ Temporary files cleaned up successfully');
 
     return {
       success: true,
       emailResult: emailResult,
-      cleanupSuccess: cleanupSuccess,
+      // cleanupSuccess: cleanupSuccess,
       summary: {
         attachmentsSent: attachments.length,
         tempFilesCleaned: tempFiles.length,
