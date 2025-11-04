@@ -47,7 +47,9 @@ const services = {
 
     const { fileId, objectTypeId, recordId } = utils.parseFileRecordString(event.propertyValue);
     const documentUrl = await hubspot.getSignedFileUrl(fileId);
+    console.log(`🔗 Fetched signed URL for fileId: ${documentUrl}`);
     const fileType = utils.getFileType(documentUrl);
+    console.log(`📄 Detected file type: ${fileType}`);
 
     if (fileType === "unknown") throw new Error(ERROR_MESSAGES.UNSUPPORTED_FILE_TYPE);
 
@@ -61,6 +63,7 @@ const services = {
       return { shouldReturn204: true, message: "Analysis failed" };
     }
 
+    console.log(`🧾 Extracted data:`, extractedData);
     await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.extractedData, extractedData);
     await hubspot.updateProperty(objectTypeId, recordId, config.HUBSPOT_CONFIG.properties.fileId, fileId);
 
