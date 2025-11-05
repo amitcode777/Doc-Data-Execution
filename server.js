@@ -423,6 +423,11 @@ app.post('/webhook/hubspot', async (req, res) => {
       webhookData[0].subscriptionType == "deal.propertyChange") {
       console.log('🔔 Webhook received for deal property change:', webhookData);
 
+      res.status(200).json({
+        status: 'success',
+        message: 'Webhook received, background process completed',
+      })
+
       const dealContact = await hubspot.fetchHubSpotAssociatedData(
         config.HUBSPOT_CONFIG.objectTypes.deal,
         webhookData[0].objectId,
@@ -442,24 +447,16 @@ app.post('/webhook/hubspot', async (req, res) => {
 
         console.log(`✅ Background process completed for contact: ${contactId}`);
 
-        return res.status(200).json({
-          status: 'success',
-          message: 'Webhook received, background process completed',
-          // result: {
-          //   contactId,
-          //   servicesFetched: serviceData.totalServices,
-          //   filesProcessed: serviceData.fileProcessing?.processingSummary?.successful || 0,
-          //   emailSent: serviceData.fileProcessing?.emailResult?.success || false
-          // }
-        });
+        return;
       }
     } else {
       // Regular processing (fast operations)
-      await services.processWebhookData(webhookData);
-      return res.status(200).json({
+      res.status(200).json({
         status: 'success',
         message: 'Webhook received, completed...'
       });
+      await services.processWebhookData(webhookData);
+      return;
     }
 
   } catch (error) {
