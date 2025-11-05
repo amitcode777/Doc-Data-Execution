@@ -1,43 +1,49 @@
-// services/email.js
-import nodemailer from 'nodemailer';
-import fs from 'fs';
-import config from '../config/index.js';
+// email.js
+import nodemailer from "nodemailer";
+import { MailtrapTransport } from "mailtrap";
+import fs from "fs";
+import config from "../config/index.js";
 
+const TOKEN = config.EMAIL_CONFIG.apiToken
+const TEST_INBOX_ID = config.EMAIL_CONFIG.inboxId
+
+if (!TOKEN) {
+  console.error("❌ MAILTRAP_API_TOKEN missing in .env");
+  process.exit(1);
+}
+
+// Create transporter
+const transport = nodemailer.createTransport(
+  MailtrapTransport({
+    token: TOKEN,
+    testInboxId: TEST_INBOX_ID,
+    sandbox: true, // enable for testing only
+  })
+);
+
+const sender = {
+  address: config.EMAIL_CONFIG.sendFrom,
+  name: "Document Analysis",
+};
 
 export const sendEmailWithAttachments = async (to, subject, message, attachments = []) => {
-  if (!config.EMAIL_CONFIG.host || !config.EMAIL_CONFIG.auth.user || !config.EMAIL_CONFIG.auth.pass) {
-    throw new Error('Email configuration missing');
-  }
+  const MAX_SIZE_PER_EMAIL = 3 * 1024 * 1024; // 5MB
+  const DELAY_BETWEEN_EMAILS = 10000;
+  console.log(`📧 Preparing to send ${attachments.length} attachments...`);
 
-  // REDUCE THIS - account for email overhead
-  const MAX_SIZE_PER_EMAIL = 3 * 1024 * 1024; // 3.5MB instead of 4MB
-  const DELAY_BETWEEN_EMAILS = 5000; // 0.5 seconds
-  
-  const transporter = nodemailer.createTransport(config.EMAIL_CONFIG);
-
-  console.log(`📧 Processing ${attachments.length} attachments`);
-
-  // Split attachments into chunks with smaller size limit
   const emailChunks = [];
   let currentChunk = [];
   let currentSize = 0;
 
+  // Split attachments into chunks under 5MB
   for (const attachment of attachments) {
     try {
       const fileSize = fs.statSync(attachment.path).size;
-      const fileSizeMB = (fileSize / 1024 / 1024).toFixed(2);
-      
-      console.log(`📄 ${attachment.filename}: ${fileSizeMB}MB`);
-      
-      // If single file is too large, skip it
       if (fileSize > MAX_SIZE_PER_EMAIL) {
-        console.log(`❌ Skipping ${attachment.filename} - too large (${fileSizeMB}MB)`);
+        console.log(`⚠️ Skipping ${attachment.filename} (too large)`);
         continue;
       }
-      
-      // Check if adding this file would exceed limit
       if (currentSize + fileSize > MAX_SIZE_PER_EMAIL && currentChunk.length > 0) {
-        console.log(`📦 Created chunk ${emailChunks.length + 1} with ${currentChunk.length} files (${(currentSize / 1024 / 1024).toFixed(2)}MB)`);
         emailChunks.push([...currentChunk]);
         currentChunk = [attachment];
         currentSize = fileSize;
@@ -45,74 +51,48 @@ export const sendEmailWithAttachments = async (to, subject, message, attachments
         currentChunk.push(attachment);
         currentSize += fileSize;
       }
-    } catch (error) {
-      console.error(`Error reading file: ${attachment.filename}`, error);
+    } catch (err) {
+      console.error(`Error reading file ${attachment.filename}:`, err.message);
     }
   }
 
-  // Don't forget the last chunk
-  if (currentChunk.length > 0) {
-    console.log(`📦 Created final chunk ${emailChunks.length + 1} with ${currentChunk.length} files (${(currentSize / 1024 / 1024).toFixed(2)}MB)`);
-    emailChunks.push(currentChunk);
-  }
+  if (currentChunk.length > 0) emailChunks.push(currentChunk);
+  console.log(`📨 Total email chunks: ${emailChunks.length}`);
 
-  console.log(`📨 Total chunks: ${emailChunks.length}`);
-
-  // Send emails
-  const results = [];
-  
+  // Send each chunk one by one
   for (let i = 0; i < emailChunks.length; i++) {
     const chunk = emailChunks[i];
-    const chunkSizeMB = (chunk.reduce((sum, att) => {
-      try {
-        return sum + fs.statSync(att.path).size;
-      } catch {
-        return sum;
-      }
-    }, 0) / 1024 / 1024).toFixed(2);
-    
-    console.log(`✉️ Sending email ${i + 1}/${emailChunks.length} with ${chunk.length} files (${chunkSizeMB}MB)`);
-
-    const emailSubject = emailChunks.length > 1 ? `${subject} (${i + 1}/${emailChunks.length})` : subject;
+    console.log(`✉️ Sending email ${i + 1}/${emailChunks.length} (${chunk.length} file(s))`);
 
     const mailOptions = {
-      from: `"Document Analysis" <${config.EMAIL_CONFIG.auth.user}>`,
+      from: sender,
       to,
-      subject: emailSubject,
-      html: `<div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>${emailSubject}</h2>
-        <p>${message}</p>
-        <p>Files attached: ${chunk.length}</p>
-        <small>Automated message from Document Analysis System</small>
-      </div>`,
-      attachments: chunk
+      subject: emailChunks.length > 1 ? `${subject} (${i + 1}/${emailChunks.length})` : subject,
+      text: message,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h3>${subject}</h3>
+          <p>${message}</p>
+          <small>Files attached: ${chunk.length}</small>
+        </div>`,
+      attachments: chunk.map((f) => ({ filename: f.filename, path: f.path })),
+      category: "Document Processing",
+      sandbox: true,
     };
 
     try {
-      const result = await transporter.sendMail(mailOptions);
-      results.push(result);
-      console.log(`✅ Sent email ${i + 1}/${emailChunks.length}`);
-      
-      // Add delay between emails
-      if (i < emailChunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_EMAILS));
-      }
-    } catch (error) {
-      console.error(`❌ Failed to send email ${i + 1}:`, error);
-      // You might want to break or continue based on your needs
-      throw error; // Re-throw to see the actual error
+      const info = await transport.sendMail(mailOptions);
+      console.log(`✅ Sent email ${i + 1}:`, info.id || "Success");
+    } catch (err) {
+      console.error(`❌ Failed to send email ${i + 1}:`, err.message);
+    }
+
+    // Always wait before next email — even if it failed
+    if (i < emailChunks.length - 1) {
+      console.log(`⏳ Waiting ${DELAY_BETWEEN_EMAILS / 1000}s before next email...`);
+      await new Promise((res) => setTimeout(res, DELAY_BETWEEN_EMAILS));
     }
   }
 
-  console.log(`🎉 Completed: ${results.length}/${emailChunks.length} emails sent`);
-  
-  return {
-    emailsSent: results.length,
-    totalAttachments: attachments.length,
-    chunksCreated: emailChunks.length
-  };
-};
-
-export default {
-  sendEmailWithAttachments
+  console.log(`🎉 Completed sending ${emailChunks.length} email(s).`);
 };

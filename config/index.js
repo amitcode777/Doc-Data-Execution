@@ -20,7 +20,12 @@ export const EMAIL_CONFIG = {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     },
-    sendTo: process.env.EMAIL_SEND_TO
+    sendTo: process.env.EMAIL_SEND_TO,
+    // sendUrl: "https://send.api.mailtrap.io/api/send",
+    sandboxSendUrl: "https://sandbox.api.mailtrap.io/api/send",
+    apiToken: process.env.MAILTRAP_API_TOKEN,
+    inboxId: process.env.MAILTRAP_INBOX_ID,
+    sendFrom: process.env.EMAIL_FROM
 };
 
 // HubSpot Configuration
