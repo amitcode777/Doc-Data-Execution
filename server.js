@@ -16,28 +16,6 @@ validateConfig();
 // Setup
 app.use(express.json({ limit: '10mb' }));
 
-// Helper function for internal API calls
-const callInternalAPI = async (endpoint, data) => {
-  const baseUrl = process.env.URL
-    ? `${process.env.URL}`
-    : `http://localhost:${config.PORT}`;
-
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || `API call failed: ${endpoint}`);
-  }
-
-  return await response.json();
-};
-
 // Business Logic
 const services = {
 
@@ -101,15 +79,24 @@ const services = {
       const serviceDetails = await hubspot.fetchHubSpotBatchRecords(
         config.HUBSPOT_CONFIG.objectTypes.service,
         serviceIds,
-        [config.HUBSPOT_CONFIG.properties.fileId],
+        [
+          config.HUBSPOT_CONFIG.properties.fileId,
+          config.HUBSPOT_CONFIG.properties.sendAttachment
+        ],
         false
       );
+
+      // console.log('Fetched service details:', serviceDetails);
 
       // Process files
       const processedFiles = await Promise.all(
         serviceDetails.results.map(async (service) => {
+          console.log('Processing service:', service);
           const fileId = service.properties.file_id;
-          if (!fileId) return null;
+          const sendAttachment = service.properties.send_attachment;
+          console.log(`File ID: ${fileId}, Send Attachment: ${sendAttachment}`);
+          // Check if fileId exists and sendAttachment is true
+          if (!fileId || !sendAttachment) return null;
 
           try {
             const signedUrl = await hubspot.getSignedFileUrl(fileId);
@@ -128,6 +115,7 @@ const services = {
       );
 
       const attachments = processedFiles.filter(Boolean);
+      console.log(`✅ Processed ${attachments.length} attachments for email`);
       const emailResult = await email.sendEmailWithAttachments(
         config.EMAIL_CONFIG.sendTo,
         'Document Analysis Report',
@@ -153,7 +141,7 @@ const services = {
   }
 };
 
-// API 1: Fetch Service Details (calls process-files API)
+// Function 1: Fetch Service Details (calls processServiceFiles function)
 const fetchContactServiceDetails = async (contactId) => {
   try {
     console.log(`🔍 Starting service details fetch for contact: ${contactId}`);
@@ -188,22 +176,21 @@ const fetchContactServiceDetails = async (contactId) => {
       throw new Error(`No services found for deal: ${dealId}`);
     }
 
-    // Fetch service details with file_id property
+    // Fetch service details with file_id and send_attachment properties
     const serviceDetails = await hubspot.fetchHubSpotBatchRecords(
       config.HUBSPOT_CONFIG.objectTypes.service,
       serviceIds,
-      [config.HUBSPOT_CONFIG.properties.fileId],
+      [
+        config.HUBSPOT_CONFIG.properties.fileId,
+        config.HUBSPOT_CONFIG.properties.sendAttachment
+      ],
       false
     );
 
     console.log('🗂️ Fetched service details for services:', serviceDetails.results.length);
 
-    // Call process-files API which will internally call send-email API
-    const fileProcessing = await callInternalAPI('/api/services/process-files', {
-      serviceDetails: serviceDetails.results,
-      contactId: contactId,
-      dealId: dealId
-    });
+    // Call processServiceFiles function directly
+    const fileProcessing = await processServiceFiles(serviceDetails.results, contactId, dealId);
 
     return {
       success: true,
@@ -228,7 +215,6 @@ const fetchContactServiceDetails = async (contactId) => {
   }
 };
 
-// API 2: Process Files (calls send-email API)
 const processServiceFiles = async (serviceDetails, contactId = null, dealId = null) => {
   const tempFiles = [];
   const processedResults = [];
@@ -239,49 +225,58 @@ const processServiceFiles = async (serviceDetails, contactId = null, dealId = nu
     // Process all files in parallel
     const processingPromises = serviceDetails.map(async (service) => {
       const fileId = service.properties.file_id;
-      if (!fileId) {
+      console.log(`Processing file ID: ${fileId}`);
+      const sendAttachment = service.properties.send_attachment;
+      console.log(`Send Attachment: ${sendAttachment}`);
+
+      if (fileId && sendAttachment == "Yes") {
+        try {
+          // Get signed URL and download file
+          const signedUrl = await hubspot.getSignedFileUrl(fileId);
+          console.log(`🔗 Fetched signed URL for fileId: ${fileId}`);
+          const tempPath = await utils.downloadAndSaveFile(signedUrl, fileId);
+          console.log(`⬇️ Downloaded and saved fileId: ${fileId} to temp path: ${tempPath}`);
+
+          // Extract file extension from URL or default to PDF
+          const fileExtension = path.extname(new URL(signedUrl).pathname) || '.pdf';
+
+          const fileInfo = {
+            filename: `document_${fileId}${fileExtension}`,
+            path: tempPath,
+            fileId: fileId,
+            serviceId: service.id
+          };
+
+          tempFiles.push(tempPath);
+          processedResults.push({
+            success: true,
+            fileInfo: fileInfo,
+            serviceId: service.id
+          });
+
+          return fileInfo;
+
+        } catch (error) {
+          console.error(`File processing failed for fileId: ${fileId}`, error);
+          processedResults.push({
+            success: false,
+            serviceId: service.id,
+            fileId: fileId,
+            error: error.message
+          });
+          return null;
+        }
+      } else {
+        console.log(`⏭️ Skipping service ${service.id} - fileId: ${fileId}, sendAttachment: ${sendAttachment}`);
         processedResults.push({
           success: false,
           serviceId: service.id,
-          error: 'No file_id found'
+          error: 'No file_id found or send_attachment is false'
         });
         return null;
       }
 
-      try {
-        // Get signed URL and download file
-        const signedUrl = await hubspot.getSignedFileUrl(fileId);
-        const tempPath = await utils.downloadAndSaveFile(signedUrl, fileId);
 
-        // Extract file extension from URL or default to PDF
-        const fileExtension = path.extname(new URL(signedUrl).pathname) || '.pdf';
-
-        const fileInfo = {
-          filename: `document_${fileId}${fileExtension}`,
-          path: tempPath,
-          fileId: fileId,
-          serviceId: service.id
-        };
-
-        tempFiles.push(tempPath);
-        processedResults.push({
-          success: true,
-          fileInfo: fileInfo,
-          serviceId: service.id
-        });
-
-        return fileInfo;
-
-      } catch (error) {
-        console.error(`File processing failed for fileId: ${fileId}`, error);
-        processedResults.push({
-          success: false,
-          serviceId: service.id,
-          fileId: fileId,
-          error: error.message
-        });
-        return null;
-      }
     });
 
     const attachments = (await Promise.all(processingPromises)).filter(Boolean);
@@ -292,13 +287,8 @@ const processServiceFiles = async (serviceDetails, contactId = null, dealId = nu
 
     console.log(`✅ Successfully processed ${attachments.length} files`);
 
-    // Call send-email API
-    const emailResult = await callInternalAPI('/api/services/send-email', {
-      attachments: attachments,
-      tempFiles: tempFiles,
-      contactId: contactId,
-      dealId: dealId
-    });
+    // Call sendServiceDocumentsEmail function directly
+    const emailResult = await sendServiceDocumentsEmail(attachments, tempFiles, contactId, dealId);
 
     return {
       success: true,
@@ -337,7 +327,7 @@ const processServiceFiles = async (serviceDetails, contactId = null, dealId = nu
   }
 };
 
-// API 3: Send Email with Attachments
+// Function 3: Send Email with Attachments
 const sendServiceDocumentsEmail = async (attachments, tempFiles, contactId = null, dealId = null) => {
   let emailResult = null;
   let cleanupSuccess = false;
@@ -365,14 +355,13 @@ const sendServiceDocumentsEmail = async (attachments, tempFiles, contactId = nul
     console.log('✅ Email sent successfully, cleaning up temporary files');
 
     // Cleanup temporary files after successful email send
-    cleanupSuccess = utils.cleanupTempFiles(tempFiles);
+    cleanupSuccess = await utils.cleanupTempFiles(tempFiles);
 
     console.log('✅ Temporary files cleaned up successfully');
 
     return {
       success: true,
       emailResult: emailResult,
-      // cleanupSuccess: cleanupSuccess,
       summary: {
         attachmentsSent: attachments.length,
         tempFilesCleaned: tempFiles.length,
@@ -414,7 +403,7 @@ app.get('/', (req, res) => res.json({
   environment: config.NODE_ENV
 }));
 
-// Webhook Route (calls only fetch-service-details API)
+// Webhook Route (uses direct function calls)
 app.post('/webhook/hubspot', async (req, res) => {
   try {
     const webhookData = req.body;
@@ -440,10 +429,8 @@ app.post('/webhook/hubspot', async (req, res) => {
         const contactId = dealContact.results[0].toObjectId;
         console.log(`🚀 Starting background process for contact: ${contactId}`);
 
-        // Call only the fetch-service-details API (which will call the others)
-        await callInternalAPI('/api/services/fetch-service-details', {
-          contactId
-        });
+        // Call function directly instead of internal API
+        await fetchContactServiceDetails(contactId);
 
         console.log(`✅ Background process completed for contact: ${contactId}`);
 
@@ -465,7 +452,7 @@ app.post('/webhook/hubspot', async (req, res) => {
   }
 });
 
-// API Route 1: Fetch Service Details (calls process-files API)
+// Keep the API routes for external calls if needed, but webhook uses direct functions
 app.post('/api/services/fetch-service-details', async (req, res) => {
   try {
     const { contactId } = req.body;
@@ -491,7 +478,6 @@ app.post('/api/services/fetch-service-details', async (req, res) => {
   }
 });
 
-// API Route 2: Process Files (calls send-email API)
 app.post('/api/services/process-files', async (req, res) => {
   try {
     const { serviceDetails, contactId, dealId } = req.body;
@@ -517,7 +503,6 @@ app.post('/api/services/process-files', async (req, res) => {
   }
 });
 
-// API Route 3: Send Email
 app.post('/api/services/send-email', async (req, res) => {
   try {
     const { attachments, tempFiles, contactId, dealId } = req.body;

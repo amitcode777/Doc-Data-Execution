@@ -39,6 +39,7 @@ export const HUBSPOT_CONFIG = {
         errorLog: "extracted_data_error_log",
         extractedData: "extracted_data",
         fileId: "file_id",
+        sendAttachment: "send_attachment",
         webhookProperty: "test_webhook",
     },
     objectTypes: {

@@ -2,6 +2,8 @@
 import fs from "fs";
 import path from "path";
 import axios from "axios";
+import { tmpdir } from 'os';
+import { existsSync, mkdirSync } from 'fs';
 
 // Use fs.promises for async file operations
 const fsAsync = fs.promises;
@@ -9,21 +11,41 @@ const fsAsync = fs.promises;
 export const downloadAndSaveFile = async (signedUrl, fileId) => {
   const response = await fetch(signedUrl);
   if (!response.ok) {
-    throw new Error(`Failed to download file ${fileId}: ${response.status}`);
+    throw new Error(`Failed to download file ${fileId}: ${response.status} ${response.statusText}`);
   }
 
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  // Use /tmp directory which is writable in Vercel
-  const tempDir = '/tmp';
+  // Use OS temp directory which works everywhere
+  const tempDir = tmpdir();
 
-  const fileExtension = path.extname(new URL(signedUrl).pathname) || '.pdf';
+  // Ensure temp directory exists
+  if (!existsSync(tempDir)) {
+    mkdirSync(tempDir, { recursive: true });
+  }
+
+  // Extract file extension safely
+  let fileExtension = '.pdf';
+  try {
+    const urlPathname = new URL(signedUrl).pathname;
+    const ext = path.extname(urlPathname);
+    if (ext) {
+      fileExtension = ext;
+    }
+  } catch (error) {
+    console.warn(`Could not parse URL for file extension, using default: ${error.message}`);
+  }
+
   const tempFilePath = path.join(tempDir, `hubspot_file_${fileId}_${Date.now()}${fileExtension}`);
 
-  // Use fs.promises.writeFile for async operation
-  await fsAsync.writeFile(tempFilePath, buffer);
-  return tempFilePath;
+  try {
+    await fsAsync.writeFile(tempFilePath, buffer);
+    console.log(`✅ File saved to: ${tempFilePath}`);
+    return tempFilePath;
+  } catch (error) {
+    throw new Error(`Failed to save file ${fileId} to disk: ${error.message}`);
+  }
 };
 
 export const cleanupTempFiles = async (filePaths) => {

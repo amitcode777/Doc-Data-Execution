@@ -45,16 +45,18 @@ export const getHubSpotRecord = async (objectType, objectId, properties = '') =>
 
 export const fetchHubSpotAssociatedData = async (objectType, objectId, toObjectType, limit = 100) => {
     const url = `${config.HUBSPOT_CONFIG.urls.association}/${objectType}/${objectId}/associations/${toObjectType}?limit=${limit}`;
+    // console.log('Fetching associated data from URL:', url);
     const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${config.HUBSPOT_ACCESS_TOKEN}` }
     });
-    
+
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return response.json();
 };
 
 export const fetchHubSpotBatchRecords = async (objectTypeId, ids, properties, archived = false) => {
     const url = `${config.HUBSPOT_CONFIG.urls.object}/${objectTypeId}/batch/read`;
+    // console.log('Fetching batch records from URL:', url);
     const body = {
         inputs: ids.map(id => ({ id: id.toString() })),
         properties,
